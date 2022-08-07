@@ -16,6 +16,45 @@ func TestProcess(t *testing.T) {
 		wantErr  bool
 	}{
 		{
+			testCase: "no a test function",
+			filename: "/testdata/t/t_test.go",
+			src: `package t
+
+func NoATestFunction() {}
+`,
+			want: `package t
+
+func NoATestFunction() {}
+`,
+			wantErr: false,
+		},
+		{
+			testCase: "looks like a test but is with param",
+			filename: "/testdata/t/t_test.go",
+			src: `package t
+
+func TestingFunctionLooksLikeATestButIsWithParam(i int) {}
+`,
+			want: `package t
+
+func TestingFunctionLooksLikeATestButIsWithParam(i int) {}
+`,
+			wantErr: false,
+		},
+		{
+			testCase: "test function but empty body",
+			filename: "/testdata/t/t_test.go",
+			src: `package t
+
+func AbcFunctionSuccessful(t *testing.T) {}
+`,
+			want: `package t
+
+func AbcFunctionSuccessful(t *testing.T) {}
+`,
+			wantErr: false,
+		},
+		{
 			testCase: "missing called t.Parallel in main test",
 			filename: "./testdata/t/t_test.go",
 			src: `package t
@@ -127,6 +166,86 @@ func TestFunctionTwoTestRunMissingCallToParallel(t *testing.T) {
 `,
 			wantErr: false,
 		},
+		{
+			testCase: "first one test run missing to parallel",
+			filename: "./testdata/t/t_test.go",
+			src: `package t
+
+import "testing"
+
+func TestFunctionFirstOneTestRunMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(t *testing.T) {
+		fmt.Println("1")
+	})
+
+	t.Run("2", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("2")
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionFirstOneTestRunMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+
+	t.Run("2", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("2")
+	})
+}
+`,
+			wantErr: false,
+		},
+		{
+			testCase: "second one test run missing call to parallel",
+			filename: "./testdata/t/t_test.go",
+			src: `package t
+
+import "testing"
+
+func TestFunctionSecondOneTestRunMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(x *testing.T) {
+		x.Parallel()
+		fmt.Println("1")
+	})
+
+	t.Run("2", func(t *testing.T) {
+		fmt.Println("2")
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionSecondOneTestRunMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(x *testing.T) {
+		x.Parallel()
+		fmt.Println("1")
+	})
+
+	t.Run("2", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("2")
+	})
+}
+`,
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -141,6 +260,7 @@ func TestFunctionTwoTestRunMissingCallToParallel(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, []byte(tt.want)) {
 				t.Errorf("Process() = \n%v, want\n%v", string(got), tt.want)
+				// t.Errorf("Process() = \n%v, want\n%v", got, []byte(tt.want))
 			}
 		})
 	}

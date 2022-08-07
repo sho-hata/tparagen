@@ -66,8 +66,8 @@ func Process(filename string, src []byte) ([]byte, error) {
 									funcArg := n.Args[1]
 
 									if fun, ok := funcArg.(*ast.FuncLit); ok {
-										ds := buildTParallelStmt(fun.Body.Lbrace)
-										fun.Body.List = append([]ast.Stmt{ds}, fun.Body.List...)
+										tpStmt := buildTParallelStmt(fun.Body.Lbrace)
+										fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
 									}
 								}
 							}
@@ -78,8 +78,8 @@ func Process(filename string, src []byte) ([]byte, error) {
 				}
 			}
 			if !funcHasParallelMethod {
-				ds := buildTParallelStmt(funcDecl.Body.Lbrace)
-				funcDecl.Body.List = append([]ast.Stmt{ds}, funcDecl.Body.List...)
+				tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace)
+				funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
 			}
 		}
 
@@ -173,6 +173,7 @@ func getRunCallbackParameterName(node ast.Node) string {
 	return ""
 }
 
+// build `t.Parallel()` statement to pos location specified in the argument.
 func buildTParallelStmt(pos token.Pos) *ast.ExprStmt {
 	return &ast.ExprStmt{
 		X: &ast.CallExpr{
