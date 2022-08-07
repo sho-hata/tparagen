@@ -26,11 +26,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		if funcDecl, ok := n.(*ast.FuncDecl); ok {
-			var (
-				funcHasParallelMethod bool
-				numberOfTestRun       int
-				positionOfTestRunNode []ast.Node
-			)
+			var funcHasParallelMethod bool
 
 			// Check runs for test functions only
 			isTest, testVar := isTestFunction(funcDecl)
@@ -51,9 +47,12 @@ func Process(filename string, src []byte) ([]byte, error) {
 						if methodRunIsCalledInTestFunction(n, testVar) {
 							// n is a call to t.Run; find out the name of the subtest's *testing.T parameter.
 							innerTestVar := getRunCallbackParameterName(n)
+							if innerTestVar == "" {
+								return true
+							}
 
 							hasParallel := false
-							numberOfTestRun++
+
 							ast.Inspect(v, func(p ast.Node) bool {
 								if !hasParallel {
 									hasParallel = methodParallelIsCalledInTestFunction(p, innerTestVar)
@@ -61,9 +60,16 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 								return true
 							})
+
 							if !hasParallel {
-								// t.Run でparallelが呼び出されていなかったとき
-								positionOfTestRunNode = append(positionOfTestRunNode, n)
+								if n, ok := n.(*ast.CallExpr); ok {
+									funcArg := n.Args[1]
+
+									if fun, ok := funcArg.(*ast.FuncLit); ok {
+										ds := buildTParallelStmt(fun.Body.Lbrace)
+										fun.Body.List = append([]ast.Stmt{ds}, fun.Body.List...)
+									}
+								}
 							}
 						}
 
@@ -145,20 +151,25 @@ func getRunCallbackParameterName(node ast.Node) string {
 			// arguments. Maybe it's not really t.Run.
 			return ""
 		}
+
 		funcArg := n.Args[1]
+
 		if fun, ok := funcArg.(*ast.FuncLit); ok {
 			if len(fun.Type.Params.List) < 1 {
 				// Subtest function doesn't have any parameters.
 				return ""
 			}
+
 			firstArg := fun.Type.Params.List[0]
 			// We'll assume firstArg.Type is *testing.T.
 			if len(firstArg.Names) < 1 {
 				return ""
 			}
+
 			return firstArg.Names[0].Name
 		}
 	}
+
 	return ""
 }
 
@@ -169,7 +180,6 @@ func buildTParallelStmt(pos token.Pos) *ast.ExprStmt {
 				X: &ast.Ident{
 					NamePos: pos,
 					Name:    "t",
-					Obj:     nil, // TODO: ?
 				},
 				Sel: &ast.Ident{
 					NamePos: pos,

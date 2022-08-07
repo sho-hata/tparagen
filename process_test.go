@@ -16,7 +16,7 @@ func TestProcess(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			testCase: "do not called t.Parallel in main test",
+			testCase: "missing called t.Parallel in main test",
 			filename: "./testdata/t/t_test.go",
 			src: `package t
 
@@ -54,6 +54,36 @@ import "testing"
 func TestFunctionCalledParallelInMain(t *testing.T) {
 	t.Parallel()
 	t.Run("hoge", nil)
+}
+`,
+			wantErr: false,
+		},
+		{
+			testCase: "missing called t.Parallel in a sub test",
+			filename: "./testdata/t/t_test.go",
+			src: `package t
+
+import "testing"
+
+func TestFunctionOneTestRunMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(t *testing.T) {
+		fmt.Println("1")
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionOneTestRunMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
 }
 `,
 			wantErr: false,

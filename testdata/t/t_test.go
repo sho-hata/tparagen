@@ -1,14 +1,21 @@
 package t
 
 import (
+	"fmt"
 	"testing"
 )
 
 func TestFunctionDoNotCalledParallelInMain(t *testing.T) {
-	t.Run("hoge", nil)
 }
 
 func TestFunctionCalledParallelInMain(t *testing.T) {
 	t.Parallel()
-	t.Run("hoge", nil)
+}
+
+func TestFunctionOneTestRunMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(t *testing.T) {
+		fmt.Println("1")
+	})
 }
