@@ -88,6 +88,45 @@ func TestFunctionOneTestRunMissingCallToParallel(t *testing.T) {
 `,
 			wantErr: false,
 		},
+		{
+			testCase: "missing called t.Parallel in multiple sub tests",
+			filename: "./testdata/t/t_test.go",
+			src: `package t
+
+import "testing"
+
+func TestFunctionTwoTestRunMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(t *testing.T) {
+		fmt.Println("1")
+	})
+
+	t.Run("2", func(t *testing.T) {
+		fmt.Println("2")
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionTwoTestRunMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+
+	t.Run("2", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("2")
+	})
+}
+`,
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
