@@ -39,17 +39,16 @@ func Process(filename string, src []byte) ([]byte, error) {
 			}
 
 			for _, l := range funcDecl.Body.List {
-				if !funcHasParallelMethod {
-					funcHasParallelMethod = methodParallelIsCalledInTestFunction(n, testVar)
-				}
-
 				switch v := l.(type) {
 				case *ast.ExprStmt:
 					ast.Inspect(v, func(n ast.Node) bool {
 						// Check if the test method is calling t.Parallel
+						if !funcHasParallelMethod {
+							funcHasParallelMethod = methodParallelIsCalledInTestFunction(n, testVar)
+						}
+
 						// Check if the t.Run within the test function is calling t.Parallel
 						if methodRunIsCalledInTestFunction(n, testVar) {
-
 							// n is a call to t.Run; find out the name of the subtest's *testing.T parameter.
 							innerTestVar := getRunCallbackParameterName(n)
 
@@ -124,6 +123,7 @@ func exprCallHasMethod(node ast.Node, receiverName, methodName string) bool {
 			}
 		}
 	}
+
 	return false
 }
 
