@@ -26,8 +26,11 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		if funcDecl, ok := n.(*ast.FuncDecl); ok {
-			var funcHasParallelMethod bool
+			var funcHasParallelMethod,
+				rangeStatementOverTestCasesExists,
+				rangeStatementHasParallelMethod bool
 
+			var rangeNode ast.Node
 			// Check runs for test functions only
 			isTest, testVar := isTestFunction(funcDecl)
 			if !isTest {
@@ -75,11 +78,60 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 						return true
 					})
+
+					// Check if the range over testcases is calling t.Parallel
+				case *ast.RangeStmt:
+					rangeNode = v
+					ast.Inspect(v, func(n ast.Node) bool {
+						if r, ok := n.(*ast.ExprStmt); ok {
+							if methodRunIsCalledInRangeStatement(r.X, testVar) {
+								// r.X is a call to t.Run; find out the name of the subtest's *testing.T parameter.
+								innerTestVar := getRunCallbackParameterName(r.X)
+
+								rangeStatementOverTestCasesExists = true
+
+								if !rangeStatementHasParallelMethod {
+									rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(r.X, innerTestVar)
+								}
+							}
+						}
+
+						return true
+					})
 				}
 			}
 			if !funcHasParallelMethod {
 				tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace)
 				funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
+			}
+
+			// report missing parallel subtest in range statement
+			if rangeNode != nil && rangeStatementOverTestCasesExists && !rangeStatementHasParallelMethod {
+				var isInsertedTparallel bool
+
+				ast.Inspect(rangeNode, func(n ast.Node) bool {
+					if isInsertedTparallel {
+						return true
+					}
+
+					if r, ok := rangeNode.(*ast.RangeStmt); ok {
+						for _, n := range r.Body.List {
+							if e, ok := n.(*ast.ExprStmt); ok {
+								if c, ok := e.X.(*ast.CallExpr); ok {
+									funcArg := c.Args[1]
+
+									if fun, ok := funcArg.(*ast.FuncLit); ok {
+										tpStmt := buildTParallelStmt(fun.Body.Lbrace)
+										fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
+										isInsertedTparallel = true
+									}
+								}
+							}
+						}
+					}
+
+					return true
+				})
 			}
 		}
 
@@ -141,6 +193,14 @@ func methodRunIsCalledInTestFunction(node ast.Node, testVar string) bool {
 	return exprCallHasMethod(node, testVar, "Run")
 }
 
+func methodRunIsCalledInRangeStatement(node ast.Node, testVar string) bool {
+	return exprCallHasMethod(node, testVar, "Run")
+}
+
+func methodParallelIsCalledInRunMethod(node ast.Node, testVar string) bool {
+	return exprCallHasMethod(node, testVar, "Parallel")
+}
+
 // In an expression of the form t.Run(x, func(q *testing.T) {...}), return the
 // value "q". In _most_ code, the name is probably t, but we shouldn't just
 // assume.
@@ -171,6 +231,26 @@ func getRunCallbackParameterName(node ast.Node) string {
 	}
 
 	return ""
+}
+
+func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
+	var methodParallelCalled bool
+	// nolint: gocritic
+	switch callExp := node.(type) {
+	case *ast.CallExpr:
+		for _, arg := range callExp.Args {
+			if !methodParallelCalled {
+				ast.Inspect(arg, func(n ast.Node) bool {
+					if !methodParallelCalled {
+						methodParallelCalled = methodParallelIsCalledInRunMethod(n, testVar)
+						return true
+					}
+					return false
+				})
+			}
+		}
+	}
+	return methodParallelCalled
 }
 
 // build `t.Parallel()` statement to pos location specified in the argument.

@@ -246,6 +246,45 @@ func TestFunctionSecondOneTestRunMissingCallToParallel(t *testing.T) {
 `,
 			wantErr: false,
 		},
+		{
+			testCase: "",
+			filename: "./testdata/t/t_test.go",
+			src: `package t
+
+import "testing"
+
+func TestFunctionMissingCallToParallelAndRangeNotUsingRangeValueInTDotRun(t *testing.T) {
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionMissingCallToParallelAndRangeNotUsingRangeValueInTDotRun(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
