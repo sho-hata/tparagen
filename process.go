@@ -243,13 +243,16 @@ func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
 				ast.Inspect(arg, func(n ast.Node) bool {
 					if !methodParallelCalled {
 						methodParallelCalled = methodParallelIsCalledInRunMethod(n, testVar)
+
 						return true
 					}
+
 					return false
 				})
 			}
 		}
 	}
+
 	return methodParallelCalled
 }
 

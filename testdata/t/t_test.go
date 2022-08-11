@@ -73,3 +73,22 @@ func TestFunctionMissingCallToParallelAndRangeNotUsingRangeValueInTDotRun(t *tes
 		})
 	}
 }
+
+func TestFunctionRangeMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+
+	// this range loop should be okay as it does not have test Run
+	for _, tc := range testCases {
+		fmt.Println(tc.name)
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fmt.Println(tc.name)
+		})
+	}
+}

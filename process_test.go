@@ -247,7 +247,7 @@ func TestFunctionSecondOneTestRunMissingCallToParallel(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			testCase: "",
+			testCase: "missing t.Parallel in range subtest",
 			filename: "./testdata/t/t_test.go",
 			src: `package t
 
@@ -274,6 +274,58 @@ func TestFunctionMissingCallToParallelAndRangeNotUsingRangeValueInTDotRun(t *tes
 	testCases := []struct {
 		name string
 	}{{name: "foo"}}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+			wantErr: false,
+		},
+		{
+			testCase: "",
+			filename: "./testdata/t/t_test.go",
+			src: `package t
+
+import "testing"
+
+func TestFunctionRangeMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+
+	// this range loop should be okay as it does not have test Run
+	for _, tc := range testCases {
+		fmt.Println(tc.name)
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionRangeMissingCallToParallel(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+
+	// this range loop should be okay as it does not have test Run
+	for _, tc := range testCases {
+		fmt.Println(tc.name)
+	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
