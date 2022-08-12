@@ -25,7 +25,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 		return nil, fmt.Errorf("cannot pase file. %w", err)
 	}
 
-	info := &types.Info{Defs: map[*ast.Ident]types.Object{}}
+	typesInfo := &types.Info{Defs: map[*ast.Ident]types.Object{}}
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		if funcDecl, ok := n.(*ast.FuncDecl); ok {
@@ -91,25 +91,25 @@ func Process(filename string, src []byte) ([]byte, error) {
 					var loopVars []types.Object
 					for _, expr := range []ast.Expr{v.Key, v.Value} {
 						if id, ok := expr.(*ast.Ident); ok {
-							loopVars = append(loopVars, info.ObjectOf(id))
+							loopVars = append(loopVars, typesInfo.ObjectOf(id))
 						}
 					}
 
 					ast.Inspect(v, func(n ast.Node) bool {
-						if r, ok := n.(*ast.ExprStmt); ok {
-							if methodRunIsCalledInRangeStatement(r.X, testVar) {
-								// r.X is a call to t.Run; find out the name of the subtest's *testing.T parameter.
-								innerTestVar := getRunCallbackParameterName(r.X)
+						if e, ok := n.(*ast.ExprStmt); ok {
+							if methodRunIsCalledInRangeStatement(e.X, testVar) {
+								// e.X is a call to t.Run; find out the name of the subtest's *testing.T parameter.
+								innerTestVar := getRunCallbackParameterName(e.X)
 
 								rangeStatementOverTestCasesExists = true
 
 								if !rangeStatementHasParallelMethod {
-									rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(r.X, innerTestVar)
+									rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(e.X, innerTestVar)
 								}
 
 								if loopVariableUsedInRun == nil {
-									if run, ok := r.X.(*ast.CallExpr); ok {
-										loopVariableUsedInRun = loopVarReferencedInRun(run, loopVars, info)
+									if run, ok := e.X.(*ast.CallExpr); ok {
+										loopVariableUsedInRun = loopVarReferencedInRun(run, loopVars, typesInfo)
 									}
 								}
 							}
@@ -119,46 +119,46 @@ func Process(filename string, src []byte) ([]byte, error) {
 					})
 				}
 			}
+
+			// Check if the main test calls t.Parallel.
 			if !funcHasParallelMethod {
 				tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace)
 				funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
 			}
 
-			// report missing parallel subtest in range statement
-			if rangeNode != nil && rangeStatementOverTestCasesExists {
+			// Check if the sub tests calls t.Parallel.
+			if rangeNode != nil && rangeStatementOverTestCasesExists && !rangeStatementHasParallelMethod {
 				var isInsertedTparallel bool
 
-				if !rangeStatementHasParallelMethod {
-					ast.Inspect(rangeNode, func(n ast.Node) bool {
-						if isInsertedTparallel {
-							return true
-						}
+				ast.Inspect(rangeNode, func(n ast.Node) bool {
+					if isInsertedTparallel {
+						return true
+					}
 
-						if r, ok := rangeNode.(*ast.RangeStmt); ok {
-							for _, n := range r.Body.List {
-								if e, ok := n.(*ast.ExprStmt); ok {
-									if c, ok := e.X.(*ast.CallExpr); ok {
-										funcArg := c.Args[1]
+					if r, ok := rangeNode.(*ast.RangeStmt); ok {
+						for _, n := range r.Body.List {
+							if e, ok := n.(*ast.ExprStmt); ok {
+								if c, ok := e.X.(*ast.CallExpr); ok {
+									funcArg := c.Args[1]
 
-										if fun, ok := funcArg.(*ast.FuncLit); ok {
-											tpStmt := buildTParallelStmt(fun.Body.Lbrace)
-											fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
-											isInsertedTparallel = true
-										}
+									if fun, ok := funcArg.(*ast.FuncLit); ok {
+										tpStmt := buildTParallelStmt(fun.Body.Lbrace)
+										fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
+										isInsertedTparallel = true
 									}
 								}
 							}
 						}
+					}
 
-						return true
-					})
-				}
+					return true
+				})
 
 				if loopVariableUsedInRun != nil {
 					if r, ok := rangeNode.(*ast.RangeStmt); ok {
 						if v, ok := r.Value.(*ast.Ident); ok {
-							ls := buildLoopVarReAssignmentStmt(r.Body.Lbrace, v.Name)
-							r.Body.List = append([]ast.Stmt{ls}, r.Body.List...)
+							lv := buildLoopVarReAssignmentStmt(r.Body.Lbrace, v.Name)
+							r.Body.List = append([]ast.Stmt{lv}, r.Body.List...)
 						}
 					}
 				}
@@ -306,14 +306,14 @@ func buildTParallelStmt(pos token.Pos) *ast.ExprStmt {
 	}
 }
 
-func buildLoopVarReAssignmentStmt(pos token.Pos, name string) *ast.AssignStmt {
+func buildLoopVarReAssignmentStmt(pos token.Pos, varName string) *ast.AssignStmt {
 	return &ast.AssignStmt{
 		Lhs: []ast.Expr{
 			&ast.Ident{
 				NamePos: pos,
-				Name:    name,
+				Name:    varName,
 				Obj: &ast.Object{
-					Name: name,
+					Name: varName,
 					Type: testMethodPackageType,
 				},
 			},
@@ -323,9 +323,9 @@ func buildLoopVarReAssignmentStmt(pos token.Pos, name string) *ast.AssignStmt {
 		Rhs: []ast.Expr{
 			&ast.Ident{
 				NamePos: pos,
-				Name:    name,
+				Name:    varName,
 				Obj: &ast.Object{
-					Name: name,
+					Name: varName,
 					Type: testMethodPackageType,
 				},
 			},
@@ -335,7 +335,7 @@ func buildLoopVarReAssignmentStmt(pos token.Pos, name string) *ast.AssignStmt {
 
 func loopVarReferencedInRun(call *ast.CallExpr, vars []types.Object, typeInfo *types.Info) (found *string) {
 	if len(call.Args) != 2 {
-		return
+		return nil
 	}
 
 	ast.Inspect(call.Args[1], func(n ast.Node) bool {
@@ -348,8 +348,9 @@ func loopVarReferencedInRun(call *ast.CallExpr, vars []types.Object, typeInfo *t
 				found = &ident.Name
 			}
 		}
+
 		return true
 	})
 
-	return
+	return found
 }
