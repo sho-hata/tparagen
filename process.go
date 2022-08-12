@@ -7,6 +7,7 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"strings"
 )
 
@@ -24,11 +25,15 @@ func Process(filename string, src []byte) ([]byte, error) {
 		return nil, fmt.Errorf("cannot pase file. %w", err)
 	}
 
+	info := &types.Info{Defs: map[*ast.Ident]types.Object{}}
+
 	ast.Inspect(f, func(n ast.Node) bool {
 		if funcDecl, ok := n.(*ast.FuncDecl); ok {
 			var funcHasParallelMethod,
 				rangeStatementOverTestCasesExists,
 				rangeStatementHasParallelMethod bool
+
+			var loopVariableUsedInRun *string
 
 			var rangeNode ast.Node
 			// Check runs for test functions only
@@ -82,6 +87,14 @@ func Process(filename string, src []byte) ([]byte, error) {
 					// Check if the range over testcases is calling t.Parallel
 				case *ast.RangeStmt:
 					rangeNode = v
+
+					var loopVars []types.Object
+					for _, expr := range []ast.Expr{v.Key, v.Value} {
+						if id, ok := expr.(*ast.Ident); ok {
+							loopVars = append(loopVars, info.ObjectOf(id))
+						}
+					}
+
 					ast.Inspect(v, func(n ast.Node) bool {
 						if r, ok := n.(*ast.ExprStmt); ok {
 							if methodRunIsCalledInRangeStatement(r.X, testVar) {
@@ -92,6 +105,12 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 								if !rangeStatementHasParallelMethod {
 									rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(r.X, innerTestVar)
+								}
+
+								if loopVariableUsedInRun == nil {
+									if run, ok := r.X.(*ast.CallExpr); ok {
+										loopVariableUsedInRun = loopVarReferencedInRun(run, loopVars, info)
+									}
 								}
 							}
 						}
@@ -106,32 +125,43 @@ func Process(filename string, src []byte) ([]byte, error) {
 			}
 
 			// report missing parallel subtest in range statement
-			if rangeNode != nil && rangeStatementOverTestCasesExists && !rangeStatementHasParallelMethod {
+			if rangeNode != nil && rangeStatementOverTestCasesExists {
 				var isInsertedTparallel bool
 
-				ast.Inspect(rangeNode, func(n ast.Node) bool {
-					if isInsertedTparallel {
-						return true
-					}
+				if !rangeStatementHasParallelMethod {
+					ast.Inspect(rangeNode, func(n ast.Node) bool {
+						if isInsertedTparallel {
+							return true
+						}
 
-					if r, ok := rangeNode.(*ast.RangeStmt); ok {
-						for _, n := range r.Body.List {
-							if e, ok := n.(*ast.ExprStmt); ok {
-								if c, ok := e.X.(*ast.CallExpr); ok {
-									funcArg := c.Args[1]
+						if r, ok := rangeNode.(*ast.RangeStmt); ok {
+							for _, n := range r.Body.List {
+								if e, ok := n.(*ast.ExprStmt); ok {
+									if c, ok := e.X.(*ast.CallExpr); ok {
+										funcArg := c.Args[1]
 
-									if fun, ok := funcArg.(*ast.FuncLit); ok {
-										tpStmt := buildTParallelStmt(fun.Body.Lbrace)
-										fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
-										isInsertedTparallel = true
+										if fun, ok := funcArg.(*ast.FuncLit); ok {
+											tpStmt := buildTParallelStmt(fun.Body.Lbrace)
+											fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
+											isInsertedTparallel = true
+										}
 									}
 								}
 							}
 						}
-					}
 
-					return true
-				})
+						return true
+					})
+				}
+
+				if loopVariableUsedInRun != nil {
+					if r, ok := rangeNode.(*ast.RangeStmt); ok {
+						if v, ok := r.Value.(*ast.Ident); ok {
+							ls := buildLoopVarReAssignmentStmt(r.Body.Lbrace, v.Name)
+							r.Body.List = append([]ast.Stmt{ls}, r.Body.List...)
+						}
+					}
+				}
 			}
 		}
 
@@ -274,4 +304,52 @@ func buildTParallelStmt(pos token.Pos) *ast.ExprStmt {
 			Rparen: pos,
 		},
 	}
+}
+
+func buildLoopVarReAssignmentStmt(pos token.Pos, name string) *ast.AssignStmt {
+	return &ast.AssignStmt{
+		Lhs: []ast.Expr{
+			&ast.Ident{
+				NamePos: pos,
+				Name:    name,
+				Obj: &ast.Object{
+					Name: name,
+					Type: testMethodPackageType,
+				},
+			},
+		},
+		TokPos: pos,
+		Tok:    token.DEFINE,
+		Rhs: []ast.Expr{
+			&ast.Ident{
+				NamePos: pos,
+				Name:    name,
+				Obj: &ast.Object{
+					Name: name,
+					Type: testMethodPackageType,
+				},
+			},
+		},
+	}
+}
+
+func loopVarReferencedInRun(call *ast.CallExpr, vars []types.Object, typeInfo *types.Info) (found *string) {
+	if len(call.Args) != 2 {
+		return
+	}
+
+	ast.Inspect(call.Args[1], func(n ast.Node) bool {
+		ident, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		for _, o := range vars {
+			if typeInfo.ObjectOf(ident) == o {
+				found = &ident.Name
+			}
+		}
+		return true
+	})
+
+	return
 }

@@ -276,6 +276,7 @@ func TestFunctionMissingCallToParallelAndRangeNotUsingRangeValueInTDotRun(t *tes
 	}{{name: "foo"}}
 
 	for _, tc := range testCases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fmt.Println(tc.name)
@@ -328,6 +329,7 @@ func TestFunctionRangeMissingCallToParallel(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fmt.Println(tc.name)
