@@ -29,13 +29,17 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		if funcDecl, ok := n.(*ast.FuncDecl); ok {
-			var funcHasParallelMethod,
+			var (
+				funcHasParallelMethod,
 				rangeStatementOverTestCasesExists,
-				rangeStatementHasParallelMethod bool
+				rangeStatementHasParallelMethod,
+				loopVarReInitialised bool
 
-			var loopVariableUsedInRun *string
+				loopVariableUsedInRun *string
 
-			var rangeNode ast.Node
+				rangeNode ast.Node
+			)
+
 			// Check runs for test functions only
 			isTest, testVar := isTestFunction(funcDecl)
 			if !isTest {
@@ -96,22 +100,27 @@ func Process(filename string, src []byte) ([]byte, error) {
 					}
 
 					ast.Inspect(v, func(n ast.Node) bool {
-						if e, ok := n.(*ast.ExprStmt); ok {
-							if methodRunIsCalledInRangeStatement(e.X, testVar) {
+						switch n := n.(type) {
+						case *ast.ExprStmt:
+							if methodRunIsCalledInRangeStatement(n.X, testVar) {
 								// e.X is a call to t.Run; find out the name of the subtest's *testing.T parameter.
-								innerTestVar := getRunCallbackParameterName(e.X)
+								innerTestVar := getRunCallbackParameterName(n.X)
 
 								rangeStatementOverTestCasesExists = true
 
 								if !rangeStatementHasParallelMethod {
-									rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(e.X, innerTestVar)
+									rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(n.X, innerTestVar)
 								}
 
 								if loopVariableUsedInRun == nil {
-									if run, ok := e.X.(*ast.CallExpr); ok {
+									if run, ok := n.X.(*ast.CallExpr); ok {
 										loopVariableUsedInRun = loopVarReferencedInRun(run, loopVars, typesInfo)
 									}
 								}
+							}
+						case *ast.AssignStmt:
+							if !loopVarReInitialised {
+								loopVarReInitialised = loopVarReAssigned(n, loopVars, typesInfo)
 							}
 						}
 
@@ -138,7 +147,14 @@ func Process(filename string, src []byte) ([]byte, error) {
 					if r, ok := rangeNode.(*ast.RangeStmt); ok {
 						for _, n := range r.Body.List {
 							if e, ok := n.(*ast.ExprStmt); ok {
+								if !methodRunIsCalledInRangeStatement(e.X, testVar) {
+									continue
+								}
+
 								if c, ok := e.X.(*ast.CallExpr); ok {
+									if len(c.Args) != 2 {
+										return true
+									}
 									funcArg := c.Args[1]
 
 									if fun, ok := funcArg.(*ast.FuncLit); ok {
@@ -154,7 +170,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 					return true
 				})
 
-				if loopVariableUsedInRun != nil {
+				if loopVariableUsedInRun != nil && !loopVarReInitialised {
 					if r, ok := rangeNode.(*ast.RangeStmt); ok {
 						if v, ok := r.Value.(*ast.Ident); ok {
 							lv := buildLoopVarReAssignmentStmt(r.Body.Lbrace, v.Name)
@@ -353,4 +369,19 @@ func loopVarReferencedInRun(call *ast.CallExpr, vars []types.Object, typeInfo *t
 	})
 
 	return found
+}
+
+func loopVarReAssigned(assign *ast.AssignStmt, vars []types.Object, typeInfo *types.Info) bool {
+	if len(assign.Rhs) != 1 || len(vars) != 2 {
+		return false
+	}
+
+	// e.g. tt := tt
+	if id, ok := assign.Rhs[0].(*ast.Ident); ok {
+		if typeInfo.ObjectOf(id) == vars[1] {
+			return true
+		}
+	}
+
+	return false
 }

@@ -227,6 +227,47 @@ func TestFunctionSecondOneTestRunMissingCallToParallel(t *testing.T) {
 `,
 		},
 		{
+			testCase: "successful range test",
+			src: `package t
+
+import "testing"
+
+func TestFunctionSuccessfulRangeTest(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(x *testing.T) {
+			x.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionSuccessfulRangeTest(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(x *testing.T) {
+			x.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+		},
+		{
 			testCase: "missing t.Parallel in range subtest",
 			src: `package t
 

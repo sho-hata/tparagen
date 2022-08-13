@@ -92,3 +92,18 @@ func TestFunctionRangeMissingCallToParallel(t *testing.T) {
 		})
 	}
 }
+
+func TestFunctionSuccessfulRangeTest(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(x *testing.T) {
+			x.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}
