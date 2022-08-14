@@ -77,6 +77,9 @@ func SampleTest(t *testing.T) {
 }
 ```
 
+## Demo
+![demo](https://media3.giphy.com/media/LlFnfP2LN7Y2h4M1l3/giphy.gif?cid=790b761192f6c8d5d02d7c55224f119a47fecefe572bfe16&rid=giphy.gif&ct=g)
+
 ## Features
 - [x] Insert RunParallel helper function into the main/sub test function.
 - [x] is called in the range method and test case variable tc being used, but is not reinitialised
