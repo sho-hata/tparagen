@@ -1,6 +1,7 @@
 package tparagen
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -109,6 +110,38 @@ func TestFunctionOneTestRunMissingCallToParallel(t *testing.T) {
 	t.Run("1", func(t *testing.T) {
 		t.Parallel()
 		fmt.Println("1")
+	})
+}
+`,
+		},
+		{
+			testCase: "missing called t.Parallel in all tests not range",
+			src: `package t
+
+import "testing"
+
+func TestFunctionRunMissingCallAllTestsToParallelNotRange(t *testing.T) {
+	t.Run("1", func(x *testing.T) {
+		fmt.Println("1")
+	})
+	t.Run("2", func(t *testing.T) {
+		fmt.Println("2")
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionRunMissingCallAllTestsToParallelNotRange(t *testing.T) {
+	t.Parallel()
+	t.Run("1", func(x *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+	t.Run("2", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("2")
 	})
 }
 `,
@@ -362,6 +395,9 @@ func TestFunctionRangeMissingCallToParallel(t *testing.T) {
 		tt := tt
 		t.Run(tt.testCase, func(t *testing.T) {
 			t.Parallel()
+			if tt.testCase == "missing called t.Parallel in all tests" {
+				fmt.Print()
+			}
 			got, err := Process("./testdata/t/t_test.go", []byte(tt.src))
 			if err != nil {
 				t.Fatal(err)

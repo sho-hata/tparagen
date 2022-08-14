@@ -62,6 +62,15 @@ func TestFunctionSecondOneTestRunMissingCallToParallel(t *testing.T) {
 	})
 }
 
+func TestFunctionRunMissingCallAllTestsToParallelNotRange(t *testing.T) {
+	t.Run("1", func(x *testing.T) {
+		fmt.Println("1")
+	})
+	t.Run("2", func(t *testing.T) {
+		fmt.Println("2")
+	})
+}
+
 func TestFunctionMissingCallToParallelAndRangeNotUsingRangeValueInTDotRun(t *testing.T) {
 	testCases := []struct {
 		name string
