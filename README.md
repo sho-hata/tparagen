@@ -131,7 +131,7 @@ wip
 
 ## Installation
 ```
-go install github.com/sho-hata/tparagen/cmd/tparagen@latest
+go install -v github.com/sho-hata/tparagen/cmd/tparagen@latest
 ```
 
 
