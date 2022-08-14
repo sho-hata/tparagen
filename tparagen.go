@@ -39,7 +39,7 @@ func fill(args []string, outStream, errStream io.Writer) (*tparagen, error) {
 	flags.Usage = func() {
 		fmt.Fprintf(
 			flag.CommandLine.Output(),
-			"tparagen embeds `t.Parallel()` in a test function in a specific source file or in an entire directory.\n\nUsage of %s:\n",
+			"tparagen embeds `testing.T.Parallel()` in a test function in a specific source file or in an entire directory.\n\nUsage of %s:\n",
 			os.Args[0],
 		)
 		flags.PrintDefaults()
