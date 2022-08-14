@@ -33,6 +33,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 				funcHasParallelMethod,
 				rangeStatementOverTestCasesExists,
 				rangeStatementHasParallelMethod,
+				insertedSubtest,
 				loopVarReInitialised bool
 
 				loopVariableUsedInRun *string
@@ -51,7 +52,9 @@ func Process(filename string, src []byte) ([]byte, error) {
 				case *ast.ExprStmt:
 					ast.Inspect(v, func(n ast.Node) bool {
 						// Check if the test method is calling t.Parallel
-						if !funcHasParallelMethod {
+						// If t.Parallel() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod` becomes true.
+						// Therefore, also check the flag indicating whether the subtest has already been inserted or not.
+						if !funcHasParallelMethod && !insertedSubtest {
 							funcHasParallelMethod = methodParallelIsCalledInTestFunction(n, testVar)
 						}
 
@@ -80,6 +83,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 									if fun, ok := funcArg.(*ast.FuncLit); ok {
 										tpStmt := buildTParallelStmt(fun.Body.Lbrace)
 										fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
+										insertedSubtest = true
 									}
 								}
 							}
