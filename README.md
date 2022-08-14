@@ -1,5 +1,5 @@
 # tparagen
-tparagen embeds `testing.T.Parallel()` in a test function in a specific source file or in an entire directory.
+tparagen insert `testing.T.Parallel()` in a test function in a specific source file or in an entire directory.
 
 
 [![test_lint](https://github.com/sho-hata/tparagen/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/sho-hata/tparagen/actions/workflows/test.yml)
@@ -78,7 +78,48 @@ func SampleTest(t *testing.T) {
 ```
 
 ## Features
-wip
+- [x] Insert RunParallel helper function into the main/sub test function.
+- [x] is called in the range method and test case variable tc being used, but is not reinitialised
+
+Before code is below,
+
+```go
+func SampleTest(t *testing.T) {
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(x *testing.T) {
+			fmt.Println(tc.name)
+		})
+	}
+}
+```
+
+After execute `tparagen`, modified code is below.
+```go
+func SampleTest(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		tc := tc
+		 // ^ tc variable reinitialized
+		t.Run(tc.name, func(x *testing.T) {
+			x.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}
+```
+
+- [] Support when called `t.Setenv()` in test
+- [] Support when called `time.Now()` in test
+- [] Ignore specified directories with cli option -i/-ignore.
+- [] Able to ignore main/sub test function by tparagen:ignore comment.
 
 ## Synopsis
 ```
@@ -99,7 +140,7 @@ go install github.com/sho-hata/tparagen/cmd/tparagen@latest
 2. Create a feature branch
 3. Commit your changes
 4. Rebase your local changes against the master branch
-5. Run test suite with the go test ./... command and confirm that it passes
+5. Run test suite with the go `test ./...` command and confirm that it passes
 6. Run `gofmt -s`
 7. Create new Pull Request
 
