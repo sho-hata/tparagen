@@ -81,6 +81,10 @@ type tparagen struct {
 
 func (t *tparagen) run() error {
 	return filepath.Walk(t.in, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
 		if info.IsDir() {
 			return nil
 		}
