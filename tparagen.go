@@ -43,13 +43,20 @@ func fill(args []string, outStream, errStream io.Writer) (*tparagen, error) {
 		flags.PrintDefaults()
 	}
 
-	var destDir string
+	var ignoreDirsString string
+	idesc := "ignore directory names. ex: foo,bar,baz\n(testdata directory is always ignored.)"
+	flags.StringVar(&ignoreDirsString, "ignore", "", idesc)
+	flags.StringVar(&ignoreDirsString, "i", "", idesc)
 
-	odesc := "destination directory."
-	flags.StringVar(&destDir, "destination", "", odesc)
+	var destDir string
 
 	if err := flags.Parse(args[1:]); err != nil {
 		return nil, err
+	}
+
+	ignoreDirs := []string{"testdata"}
+	if len(ignoreDirs) != 0 {
+		ignoreDirs = append(ignoreDirs, strings.Split(ignoreDirsString, ",")...)
 	}
 
 	targetDir := "./"
@@ -64,16 +71,18 @@ func fill(args []string, outStream, errStream io.Writer) (*tparagen, error) {
 	}
 
 	return &tparagen{
-		in:        targetDir,
-		dest:      destDir,
-		outStream: outStream,
-		errStream: errStream,
+		in:         targetDir,
+		dest:       destDir,
+		outStream:  outStream,
+		errStream:  errStream,
+		ignoreDirs: ignoreDirs,
 	}, nil
 }
 
 type tparagen struct {
 	in, dest             string
 	outStream, errStream io.Writer
+	ignoreDirs           []string
 	errFlag              bool
 }
 
@@ -81,6 +90,10 @@ func (t *tparagen) run() error {
 	return filepath.Walk(t.in, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+
+		if info.IsDir() && t.skipDir(path) {
+			return filepath.SkipDir
 		}
 
 		if info.IsDir() {
@@ -160,4 +173,14 @@ func (t *tparagen) writeOtherPath(in, dist, path string, got []byte) error {
 	fmt.Printf("created at %q\n", dp)
 
 	return nil
+}
+
+func (t *tparagen) skipDir(p string) bool {
+	for _, dir := range t.ignoreDirs {
+		if filepath.Base(p) == dir {
+			return true
+		}
+	}
+
+	return false
 }

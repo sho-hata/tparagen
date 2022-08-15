@@ -121,7 +121,7 @@ func SampleTest(t *testing.T) {
 
 - Support when called `t.Setenv()` in test
 - Support when called `time.Now()` in test
-- Ignore specified directories with cli option -i/-ignore.
+- [x] Ignore specified directories with cli option -i/-ignore.
 - Able to ignore main/sub test function by tparagen:ignore comment.
 
 ## Synopsis
@@ -130,8 +130,19 @@ $ tparagen
 ```
 
 ## Options
-wip
+```
+$ tparagen -h
+tparagen inserts `testing.T.Parallel()` in a test function in a specific source file or in an entire directory.
 
+Usage of tparagen:
+  -i string
+        ignore directory names. ex: foo,bar,baz
+        (testdata directory is always ignored.)
+  -ignore string
+        ignore directory names. ex: foo,bar,baz
+        (testdata directory is always ignored.)
+
+```
 ## Installation
 ```
 go install -v github.com/sho-hata/tparagen/cmd/tparagen@latest
