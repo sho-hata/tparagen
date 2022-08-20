@@ -28,145 +28,68 @@ func Process(filename string, src []byte) ([]byte, error) {
 	typesInfo := &types.Info{Defs: map[*ast.Ident]types.Object{}}
 
 	ast.Inspect(f, func(n ast.Node) bool {
-		if funcDecl, ok := n.(*ast.FuncDecl); ok {
-			var (
-				funcHasParallelMethod,
-				rangeStatementOverTestCasesExists,
-				rangeStatementHasParallelMethod,
-				insertedSubtest,
-				loopVarReInitialised bool
+		funcDecl, ok := n.(*ast.FuncDecl)
+		if !ok {
+			return true
+		}
+		// Check runs for test functions only
+		isTest, testVar := isTestFunction(funcDecl)
+		if !isTest {
+			return true
+		}
 
-				loopVariableUsedInRun *string
+		var (
+			funcHasParallelMethod,
+			rangeStatementOverTestCasesExists,
+			rangeStatementHasParallelMethod,
+			insertedSubtest,
+			loopVarReInitialized bool
 
-				rangeNode ast.Node
-			)
+			loopVariableUsedInRun *string
 
-			// Check runs for test functions only
-			isTest, testVar := isTestFunction(funcDecl)
-			if !isTest {
-				return true
-			}
+			rangeNode ast.Node
+		)
 
-			for _, l := range funcDecl.Body.List {
-				switch v := l.(type) {
-				case *ast.ExprStmt:
-					ast.Inspect(v, func(n ast.Node) bool {
-						// Check if the test method is calling t.Parallel
-						// If t.Parallel() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod` becomes true.
-						// Therefore, also check the flag indicating whether the subtest has already been inserted or not.
-						if !funcHasParallelMethod && !insertedSubtest {
-							funcHasParallelMethod = methodParallelIsCalledInTestFunction(n, testVar)
-						}
+		for _, l := range funcDecl.Body.List {
+			switch v := l.(type) {
+			case *ast.ExprStmt:
+				ast.Inspect(v, func(n ast.Node) bool {
+					// Check if the test method is calling t.Parallel
+					// If t.Parallel() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod` becomes true.
+					// Therefore, also check the flag indicating whether the subtest has already been inserted or not.
+					if !funcHasParallelMethod && !insertedSubtest {
+						funcHasParallelMethod = methodParallelIsCalledInTestFunction(n, testVar)
+					}
 
-						// Check if the t.Run within the test function is calling t.Parallel
-						if methodRunIsCalledInTestFunction(n, testVar) {
-							// n is a call to t.Run; find out the name of the subtest's *testing.T parameter.
-							innerTestVar := getRunCallbackParameterName(n)
-							if innerTestVar == "" {
-								return true
-							}
+					// Check if the t.Run within the test function is calling t.Parallel
+					if !methodRunIsCalledInTestFunction(n, testVar) {
+						return true
+					}
 
-							hasParallel := false
+					// n is a call to t.Run; find out the name of the subtest's *testing.T parameter.
+					innerTestVar := getRunCallbackParameterName(n)
+					if innerTestVar == "" {
+						return true
+					}
 
-							ast.Inspect(v, func(p ast.Node) bool {
-								if !hasParallel {
-									hasParallel = methodParallelIsCalledInTestFunction(p, innerTestVar)
-								}
+					hasParallel := false
 
-								return true
-							})
-
-							if !hasParallel {
-								if n, ok := n.(*ast.CallExpr); ok {
-									funcArg := n.Args[1]
-
-									if fun, ok := funcArg.(*ast.FuncLit); ok {
-										tpStmt := buildTParallelStmt(fun.Body.Lbrace)
-										fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
-										insertedSubtest = true
-									}
-								}
-							}
+					ast.Inspect(v, func(p ast.Node) bool {
+						if !hasParallel {
+							hasParallel = methodParallelIsCalledInTestFunction(p, innerTestVar)
 						}
 
 						return true
 					})
 
-					// Check if the range over testcases is calling t.Parallel
-				case *ast.RangeStmt:
-					rangeNode = v
-
-					var loopVars []types.Object
-					for _, expr := range []ast.Expr{v.Key, v.Value} {
-						if id, ok := expr.(*ast.Ident); ok {
-							loopVars = append(loopVars, typesInfo.ObjectOf(id))
-						}
-					}
-
-					ast.Inspect(v, func(n ast.Node) bool {
-						switch n := n.(type) {
-						case *ast.ExprStmt:
-							if methodRunIsCalledInRangeStatement(n.X, testVar) {
-								// e.X is a call to t.Run; find out the name of the subtest's *testing.T parameter.
-								innerTestVar := getRunCallbackParameterName(n.X)
-
-								rangeStatementOverTestCasesExists = true
-
-								if !rangeStatementHasParallelMethod {
-									rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(n.X, innerTestVar)
-								}
-
-								if loopVariableUsedInRun == nil {
-									if run, ok := n.X.(*ast.CallExpr); ok {
-										loopVariableUsedInRun = loopVarReferencedInRun(run, loopVars, typesInfo)
-									}
-								}
-							}
-						case *ast.AssignStmt:
-							if !loopVarReInitialised {
-								loopVarReInitialised = loopVarReAssigned(n, loopVars, typesInfo)
-							}
-						}
-
-						return true
-					})
-				}
-			}
-
-			// Check if the main test calls t.Parallel.
-			if !funcHasParallelMethod {
-				tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace)
-				funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
-			}
-
-			// Check if the sub tests calls t.Parallel.
-			if rangeNode != nil && rangeStatementOverTestCasesExists && !rangeStatementHasParallelMethod {
-				var isInsertedTparallel bool
-
-				ast.Inspect(rangeNode, func(n ast.Node) bool {
-					if isInsertedTparallel {
-						return true
-					}
-
-					if r, ok := rangeNode.(*ast.RangeStmt); ok {
-						for _, n := range r.Body.List {
-							if e, ok := n.(*ast.ExprStmt); ok {
-								if !methodRunIsCalledInRangeStatement(e.X, testVar) {
-									continue
-								}
-
-								if c, ok := e.X.(*ast.CallExpr); ok {
-									if len(c.Args) != 2 {
-										return true
-									}
-									funcArg := c.Args[1]
-
-									if fun, ok := funcArg.(*ast.FuncLit); ok {
-										tpStmt := buildTParallelStmt(fun.Body.Lbrace)
-										fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
-										isInsertedTparallel = true
-									}
-								}
+					if !hasParallel {
+						if n, ok := n.(*ast.CallExpr); ok {
+							funcArg := n.Args[1]
+							// insert parallel helper method
+							if fun, ok := funcArg.(*ast.FuncLit); ok {
+								tpStmt := buildTParallelStmt(fun.Body.Lbrace)
+								fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
+								insertedSubtest = true
 							}
 						}
 					}
@@ -174,15 +97,95 @@ func Process(filename string, src []byte) ([]byte, error) {
 					return true
 				})
 
-				if loopVariableUsedInRun != nil && !loopVarReInitialised {
-					if r, ok := rangeNode.(*ast.RangeStmt); ok {
+			// Check if the range over testcases is calling t.Parallel
+			case *ast.RangeStmt:
+				rangeNode = v
+
+				var loopVars []types.Object
+				for _, expr := range []ast.Expr{v.Key, v.Value} {
+					if id, ok := expr.(*ast.Ident); ok {
+						loopVars = append(loopVars, typesInfo.ObjectOf(id))
+					}
+				}
+
+				ast.Inspect(v, func(n ast.Node) bool {
+					switch n := n.(type) {
+					case *ast.ExprStmt:
+						if !methodRunIsCalledInRangeStatement(n.X, testVar) {
+							return true
+						}
+						// e.X is a call to t.Run; find out the name of the subtest's *testing.T parameter.
+						innerTestVar := getRunCallbackParameterName(n.X)
+
+						rangeStatementOverTestCasesExists = true
+
+						if !rangeStatementHasParallelMethod {
+							rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(n.X, innerTestVar)
+						}
+
+						if loopVariableUsedInRun == nil {
+							if run, ok := n.X.(*ast.CallExpr); ok {
+								loopVariableUsedInRun = loopVarReferencedInRun(run, loopVars, typesInfo)
+							}
+						}
+					case *ast.AssignStmt:
+						if !loopVarReInitialized {
+							loopVarReInitialized = loopVarReAssigned(n, loopVars, typesInfo)
+						}
+					}
+
+					return true
+				})
+			}
+		}
+
+		// Check if the main test calls t.Parallel.
+		if !funcHasParallelMethod {
+			tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace)
+			funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
+		}
+
+		// Check if the sub tests calls t.Parallel.
+		if rangeNode != nil && rangeStatementOverTestCasesExists && !rangeStatementHasParallelMethod {
+			var isInsertedTparallel bool
+
+			ast.Inspect(rangeNode, func(n ast.Node) bool {
+				if isInsertedTparallel {
+					return true
+				}
+
+				if r, ok := rangeNode.(*ast.RangeStmt); ok {
+					for _, n := range r.Body.List {
+						if e, ok := n.(*ast.ExprStmt); ok {
+							if !methodRunIsCalledInRangeStatement(e.X, testVar) {
+								continue
+							}
+
+							if c, ok := e.X.(*ast.CallExpr); ok {
+								if len(c.Args) != 2 {
+									return true
+								}
+								funcArg := c.Args[1]
+								// insert parallel helper method
+								if fun, ok := funcArg.(*ast.FuncLit); ok {
+									tpStmt := buildTParallelStmt(fun.Body.Lbrace)
+									fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
+									isInsertedTparallel = true
+								}
+							}
+						}
+					}
+					if loopVariableUsedInRun != nil && !loopVarReInitialized {
+						// insert loop var reassignment statement
 						if v, ok := r.Value.(*ast.Ident); ok {
 							lv := buildLoopVarReAssignmentStmt(r.Body.Lbrace, v.Name)
 							r.Body.List = append([]ast.Stmt{lv}, r.Body.List...)
 						}
 					}
 				}
-			}
+
+				return true
+			})
 		}
 
 		return true
@@ -209,17 +212,27 @@ func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
 	}
 
 	param := funcDecl.Type.Params.List[0]
-	if starExp, ok := param.Type.(*ast.StarExpr); ok {
-		if selectExpr, ok := starExp.X.(*ast.SelectorExpr); ok {
-			if selectExpr.Sel.Name == testMethodStruct {
-				if s, ok := selectExpr.X.(*ast.Ident); ok {
-					return s.Name == testMethodPackageType, param.Names[0].Name
-				}
-			}
-		}
+
+	starExp, ok := param.Type.(*ast.StarExpr)
+	if !ok {
+		return false, ""
 	}
 
-	return false, ""
+	selectExpr, ok := starExp.X.(*ast.SelectorExpr)
+	if !ok {
+		return false, ""
+	}
+
+	if selectExpr.Sel.Name != testMethodStruct {
+		return false, ""
+	}
+
+	s, ok := selectExpr.X.(*ast.Ident)
+	if !ok {
+		return false, ""
+	}
+
+	return s.Name == testMethodPackageType, param.Names[0].Name
 }
 
 func exprCallHasMethod(node ast.Node, receiverName, methodName string) bool {
