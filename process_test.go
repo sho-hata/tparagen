@@ -18,11 +18,11 @@ func TestProcess(t *testing.T) {
 			testCase: "no a test function",
 			src: `package t
 
-func NoATestFunction() {}
+func NoTestFunction() {}
 `,
 			want: `package t
 
-func NoATestFunction() {}
+func NoTestFunction() {}
 `,
 		},
 		{
@@ -53,14 +53,14 @@ func AbcFunctionSuccessful(t *testing.T) {}
 
 import "testing"
 
-func TestFunctionDoNotCalledParallelInMain(t *testing.T) {
+func TestFunctionMissingParallelInMain(t *testing.T) {
 	t.Run("hoge", nil)
 }`,
 			want: `package t
 
 import "testing"
 
-func TestFunctionDoNotCalledParallelInMain(t *testing.T) {
+func TestFunctionMissingParallelInMain(t *testing.T) {
 	t.Parallel()
 	t.Run("hoge", nil)
 }
@@ -72,7 +72,7 @@ func TestFunctionDoNotCalledParallelInMain(t *testing.T) {
 
 import "testing"
 
-func TestFunctionCalledParallelInMain(t *testing.T) {
+func TestFunctionHasParallelInMain(t *testing.T) {
 	t.Parallel()
 	t.Run("hoge", nil)
 }`,
@@ -80,7 +80,7 @@ func TestFunctionCalledParallelInMain(t *testing.T) {
 
 import "testing"
 
-func TestFunctionCalledParallelInMain(t *testing.T) {
+func TestFunctionHasParallelInMain(t *testing.T) {
 	t.Parallel()
 	t.Run("hoge", nil)
 }
@@ -92,7 +92,7 @@ func TestFunctionCalledParallelInMain(t *testing.T) {
 
 import "testing"
 
-func TestFunctionOneTestRunMissingCallToParallel(t *testing.T) {
+func TestFunctionHasParallelInMainOneTestRunMissingHasParallel(t *testing.T) {
 	t.Parallel()
 
 	t.Run("1", func(t *testing.T) {
@@ -104,7 +104,7 @@ func TestFunctionOneTestRunMissingCallToParallel(t *testing.T) {
 
 import "testing"
 
-func TestFunctionOneTestRunMissingCallToParallel(t *testing.T) {
+func TestFunctionHasParallelInMainOneTestRunMissingHasParallel(t *testing.T) {
 	t.Parallel()
 
 	t.Run("1", func(t *testing.T) {
@@ -120,7 +120,7 @@ func TestFunctionOneTestRunMissingCallToParallel(t *testing.T) {
 
 import "testing"
 
-func TestFunctionRunMissingCallAllTestsToParallelNotRange(t *testing.T) {
+func TestFunctionMissingParallelAllTests(t *testing.T) {
 	t.Run("1", func(x *testing.T) {
 		fmt.Println("1")
 	})
@@ -133,7 +133,7 @@ func TestFunctionRunMissingCallAllTestsToParallelNotRange(t *testing.T) {
 
 import "testing"
 
-func TestFunctionRunMissingCallAllTestsToParallelNotRange(t *testing.T) {
+func TestFunctionMissingParallelAllTests(t *testing.T) {
 	t.Parallel()
 	t.Run("1", func(x *testing.T) {
 		t.Parallel()
@@ -152,7 +152,7 @@ func TestFunctionRunMissingCallAllTestsToParallelNotRange(t *testing.T) {
 
 import "testing"
 
-func TestMainFunctionMissingParallelSubTestHasParallel(t *testing.T) {
+func TestFunctionMissingParallelInMainSubTestHasParallel(t *testing.T) {
 	t.Run("1", func(t *testing.T) {
 		t.Parallel()
 		fmt.Println("1")
@@ -163,7 +163,7 @@ func TestMainFunctionMissingParallelSubTestHasParallel(t *testing.T) {
 
 import "testing"
 
-func TestMainFunctionMissingParallelSubTestHasParallel(t *testing.T) {
+func TestFunctionMissingParallelInMainSubTestHasParallel(t *testing.T) {
 	t.Parallel()
 	t.Run("1", func(t *testing.T) {
 		t.Parallel()
@@ -178,7 +178,7 @@ func TestMainFunctionMissingParallelSubTestHasParallel(t *testing.T) {
 
 import "testing"
 
-func TestFunctionTwoTestRunMissingCallToParallel(t *testing.T) {
+func TestFunctionMissingParallelInTwoTestMainTestHasParallel(t *testing.T) {
 	t.Parallel()
 
 	t.Run("1", func(t *testing.T) {
@@ -194,7 +194,7 @@ func TestFunctionTwoTestRunMissingCallToParallel(t *testing.T) {
 
 import "testing"
 
-func TestFunctionTwoTestRunMissingCallToParallel(t *testing.T) {
+func TestFunctionMissingParallelInTwoTestMainTestHasParallel(t *testing.T) {
 	t.Parallel()
 
 	t.Run("1", func(t *testing.T) {
@@ -215,7 +215,7 @@ func TestFunctionTwoTestRunMissingCallToParallel(t *testing.T) {
 
 import "testing"
 
-func TestFunctionFirstOneTestRunMissingCallToParallel(t *testing.T) {
+func TestFunctionMissingParallelInFirstOneTestMainTestHasParallel(t *testing.T) {
 	t.Parallel()
 
 	t.Run("1", func(t *testing.T) {
@@ -232,7 +232,7 @@ func TestFunctionFirstOneTestRunMissingCallToParallel(t *testing.T) {
 
 import "testing"
 
-func TestFunctionFirstOneTestRunMissingCallToParallel(t *testing.T) {
+func TestFunctionMissingParallelInFirstOneTestMainTestHasParallel(t *testing.T) {
 	t.Parallel()
 
 	t.Run("1", func(t *testing.T) {
@@ -253,7 +253,7 @@ func TestFunctionFirstOneTestRunMissingCallToParallel(t *testing.T) {
 
 import "testing"
 
-func TestFunctionSecondOneTestRunMissingCallToParallel(t *testing.T) {
+func TestFunctionMissingParallelInSecondOneTestMainTestHasParallel(t *testing.T) {
 	t.Parallel()
 
 	t.Run("1", func(x *testing.T) {
@@ -270,7 +270,7 @@ func TestFunctionSecondOneTestRunMissingCallToParallel(t *testing.T) {
 
 import "testing"
 
-func TestFunctionSecondOneTestRunMissingCallToParallel(t *testing.T) {
+func TestFunctionMissingParallelInSecondOneTestMainTestHasParallel(t *testing.T) {
 	t.Parallel()
 
 	t.Run("1", func(x *testing.T) {
@@ -332,7 +332,7 @@ func TestFunctionSuccessfulRangeTest(t *testing.T) {
 
 import "testing"
 
-func TestFunctionMissingCallToParallelAndRangeNotUsingRangeValueInTDotRun(t *testing.T) {
+func TestFunctionMissingParallelRangeNotUsingRangeValueInTRun(t *testing.T) {
 	testCases := []struct {
 		name string
 	}{{name: "foo"}}
@@ -348,7 +348,7 @@ func TestFunctionMissingCallToParallelAndRangeNotUsingRangeValueInTDotRun(t *tes
 
 import "testing"
 
-func TestFunctionMissingCallToParallelAndRangeNotUsingRangeValueInTDotRun(t *testing.T) {
+func TestFunctionMissingParallelRangeNotUsingRangeValueInTRun(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
 		name string
