@@ -50,6 +50,13 @@ func TestFunctionFirstOneTestRunMissingCallToParallel(t *testing.T) {
 	})
 }
 
+func gg(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+}
+
 func TestFunctionSecondOneTestRunMissingCallToParallel(t *testing.T) {
 	t.Parallel()
 

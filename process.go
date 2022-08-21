@@ -27,6 +27,48 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 	typesInfo := &types.Info{Defs: map[*ast.Ident]types.Object{}}
 
+	var funcHasSetenv bool
+	var funcHasParallelMethod bool
+
+	ast.Inspect(f, func(n ast.Node) bool {
+		funcDecl, ok := n.(*ast.FuncDecl)
+		if !ok {
+			return true
+		}
+		// Check runs for test functions only
+		isTest, testVar := isTestFunction(funcDecl)
+		if !isTest {
+			return true
+		}
+
+		for _, l := range funcDecl.Body.List {
+			switch v := l.(type) {
+			case *ast.ExprStmt:
+				ast.Inspect(v, func(n ast.Node) bool {
+					// Check if the t.Run within the test function is calling t.Parallel
+					if methodRunIsCalledInTestFunction(n, testVar) {
+						return false
+					}
+
+					// Check if the test method is calling t.Parallel
+					// If t.Parallel() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod` becomes true.
+					// Therefore, also check the flag indicating whether the subtest has already been inserted or not.
+					if !funcHasParallelMethod {
+						funcHasParallelMethod = methodParallelIsCalledInTestFunction(n, testVar)
+					}
+
+					if !funcHasSetenv {
+						funcHasSetenv = methodSetenvIsCalledInTestFunction(n, testVar)
+					}
+
+					return true
+				})
+			}
+		}
+
+		return true
+	})
+
 	ast.Inspect(f, func(n ast.Node) bool {
 		funcDecl, ok := n.(*ast.FuncDecl)
 		if !ok {
@@ -39,10 +81,9 @@ func Process(filename string, src []byte) ([]byte, error) {
 		}
 
 		var (
-			funcHasParallelMethod,
 			rangeStatementOverTestCasesExists,
 			rangeStatementHasParallelMethod,
-			insertedSubtest,
+			rangeStatementHasSetEnvMethod,
 			loopVarReInitialized bool
 
 			loopVariableUsedInRun *string
@@ -54,13 +95,6 @@ func Process(filename string, src []byte) ([]byte, error) {
 			switch v := l.(type) {
 			case *ast.ExprStmt:
 				ast.Inspect(v, func(n ast.Node) bool {
-					// Check if the test method is calling t.Parallel
-					// If t.Parallel() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod` becomes true.
-					// Therefore, also check the flag indicating whether the subtest has already been inserted or not.
-					if !funcHasParallelMethod && !insertedSubtest {
-						funcHasParallelMethod = methodParallelIsCalledInTestFunction(n, testVar)
-					}
-
 					// Check if the t.Run within the test function is calling t.Parallel
 					if !methodRunIsCalledInTestFunction(n, testVar) {
 						return true
@@ -72,24 +106,28 @@ func Process(filename string, src []byte) ([]byte, error) {
 						return true
 					}
 
-					hasParallel := false
+					hasParallel, hasSetEnv := false, false
 
 					ast.Inspect(v, func(p ast.Node) bool {
 						if !hasParallel {
 							hasParallel = methodParallelIsCalledInTestFunction(p, innerTestVar)
 						}
+						if !hasSetEnv {
+							hasSetEnv = methodSetenvIsCalledInTestFunction(p, innerTestVar)
+						}
 
 						return true
 					})
 
-					if !hasParallel {
+					// Check if the sub test calls t.Parallel.
+					if !hasParallel && !hasSetEnv {
 						if n, ok := n.(*ast.CallExpr); ok {
 							funcArg := n.Args[1]
 							// insert parallel helper method
 							if fun, ok := funcArg.(*ast.FuncLit); ok {
 								tpStmt := buildTParallelStmt(fun.Body.Lbrace)
 								fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
-								insertedSubtest = true
+								// insertedSubtest = true
 							}
 						}
 					}
@@ -123,6 +161,10 @@ func Process(filename string, src []byte) ([]byte, error) {
 							rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(n.X, innerTestVar)
 						}
 
+						if !rangeStatementHasSetEnvMethod {
+							rangeStatementHasSetEnvMethod = methodSetEnvIsCalledInMethodRun(n.X, innerTestVar)
+						}
+
 						if loopVariableUsedInRun == nil {
 							if run, ok := n.X.(*ast.CallExpr); ok {
 								loopVariableUsedInRun = loopVarReferencedInRun(run, loopVars, typesInfo)
@@ -140,13 +182,13 @@ func Process(filename string, src []byte) ([]byte, error) {
 		}
 
 		// Check if the main test calls t.Parallel.
-		if !funcHasParallelMethod {
+		if !funcHasParallelMethod && !funcHasSetenv {
 			tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace)
 			funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
 		}
 
 		// Check if the sub tests calls t.Parallel.
-		if rangeNode != nil && rangeStatementOverTestCasesExists && !rangeStatementHasParallelMethod {
+		if rangeNode != nil && rangeStatementOverTestCasesExists && !rangeStatementHasParallelMethod && !rangeStatementHasSetEnvMethod {
 			var isInsertedTparallel bool
 
 			ast.Inspect(rangeNode, func(n ast.Node) bool {
@@ -252,12 +294,20 @@ func methodParallelIsCalledInTestFunction(node ast.Node, testVar string) bool {
 	return exprCallHasMethod(node, testVar, "Parallel")
 }
 
+func methodSetenvIsCalledInTestFunction(node ast.Node, testVar string) bool {
+	return exprCallHasMethod(node, testVar, "Setenv")
+}
+
 func methodRunIsCalledInTestFunction(node ast.Node, testVar string) bool {
 	return exprCallHasMethod(node, testVar, "Run")
 }
 
 func methodRunIsCalledInRangeStatement(node ast.Node, testVar string) bool {
 	return exprCallHasMethod(node, testVar, "Run")
+}
+
+func methodSetEnvIsCalledInRunMethod(node ast.Node, testVar string) bool {
+	return exprCallHasMethod(node, testVar, "Setenv")
 }
 
 func methodParallelIsCalledInRunMethod(node ast.Node, testVar string) bool {
@@ -317,6 +367,29 @@ func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
 	}
 
 	return methodParallelCalled
+}
+
+func methodSetEnvIsCalledInMethodRun(node ast.Node, testVar string) bool {
+	var methodSetenvCalled bool
+	// nolint: gocritic
+	switch callExp := node.(type) {
+	case *ast.CallExpr:
+		for _, arg := range callExp.Args {
+			if !methodSetenvCalled {
+				ast.Inspect(arg, func(n ast.Node) bool {
+					if !methodSetenvCalled {
+						methodSetenvCalled = methodSetEnvIsCalledInRunMethod(n, testVar)
+
+						return true
+					}
+
+					return false
+				})
+			}
+		}
+	}
+
+	return methodSetenvCalled
 }
 
 // build `t.Parallel()` statement to pos location specified in the argument.

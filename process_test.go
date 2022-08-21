@@ -147,6 +147,32 @@ func TestFunctionRunMissingCallAllTestsToParallelNotRange(t *testing.T) {
 `,
 		},
 		{
+			testCase: "t",
+			src: `package t
+
+import "testing"
+
+func TestMainFunctionMissingParallelSubTestHasParallel(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestMainFunctionMissingParallelSubTestHasParallel(t *testing.T) {
+	t.Parallel()
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+}
+`,
+		},
+		{
 			testCase: "missing called t.Parallel in multiple sub tests",
 			src: `package t
 
@@ -383,6 +409,222 @@ func TestFunctionRangeMissingCallToParallel(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+		},
+		{
+			testCase: "missing t.Parallel in main test function has t.Setenv",
+			src: `package t
+
+import "testing"
+
+func TestMainFunctionMissingParallelHasSetenv(t *testing.T) {
+	t.Setenv("TEST", "test")
+	t.Run("hoge", nil)
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestMainFunctionMissingParallelHasSetenv(t *testing.T) {
+	t.Setenv("TEST", "test")
+	t.Run("hoge", nil)
+}
+`,
+		},
+		{
+			testCase: "missing t.Parallel in sub test function has t.Setenv",
+			src: `package t
+
+import "testing"
+
+func TestSubFunctionMissingParallelHasSetenv(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		t.Setenv("TEST", "test")
+		fmt.Println("1")
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestSubFunctionMissingParallelHasSetenv(t *testing.T) {
+	t.Parallel()
+	t.Run("1", func(t *testing.T) {
+		t.Setenv("TEST", "test")
+		fmt.Println("1")
+	})
+}
+`,
+		},
+		{
+			testCase: "missing t.Parallel in sub test function Main Test has t.Setenv",
+			src: `package t
+
+import "testing"
+
+func TestSubFunctionMissingParallelSubTestHasSetenv(t *testing.T) {
+	t.Setenv("TEST", "test")
+	t.Run("1", func(t *testing.T) {
+		fmt.Println("1")
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestSubFunctionMissingParallelSubTestHasSetenv(t *testing.T) {
+	t.Setenv("TEST", "test")
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+}
+`,
+		},
+		{
+			testCase: "main & sub test function has t.Setenv",
+			src: `package t
+
+import "testing"
+
+func TestMainAndSubFunctionHasSetenv(t *testing.T) {
+	t.Setenv("TEST", "test")
+	t.Run("1", func(t *testing.T) {
+		t.Setenv("TEST", "test")
+		fmt.Println("1")
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestMainAndSubFunctionHasSetenv(t *testing.T) {
+	t.Setenv("TEST", "test")
+	t.Run("1", func(t *testing.T) {
+		t.Setenv("TEST", "test")
+		fmt.Println("1")
+	})
+}
+`,
+		},
+		{
+			testCase: "main test function has t.Setenv with range statement",
+			src: `package t
+
+import "testing"
+
+func TestFunctionMainHasSetenvWithRangeTest(t *testing.T) {
+	t.Setenv("TEST", "test")
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(x *testing.T) {
+			x.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionMainHasSetenvWithRangeTest(t *testing.T) {
+	t.Setenv("TEST", "test")
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(x *testing.T) {
+			x.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+		},
+		{
+			testCase: "sub test function has t.Setenv with range statement",
+			src: `package t
+
+import "testing"
+
+func TestFunctionSubHasSetenvWithRangeTest(t *testing.T) {
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(x *testing.T) {
+			x.Setenv("TEST", "test")
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionSubHasSetenvWithRangeTest(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(x *testing.T) {
+			x.Setenv("TEST", "test")
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+		},
+		{
+			testCase: "main & sub test function has t.Setenv with range statement",
+			src: `package t
+
+import "testing"
+
+func TestFunctionMainAndSubHasSetenvWithRangeTest(t *testing.T) {
+	t.Setenv("TEST", "test")
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(x *testing.T) {
+			x.Setenv("TEST", "test")
+			fmt.Println(tc.name)
+		})
+	}
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionMainAndSubHasSetenvWithRangeTest(t *testing.T) {
+	t.Setenv("TEST", "test")
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(x *testing.T) {
+			x.Setenv("TEST", "test")
 			fmt.Println(tc.name)
 		})
 	}
