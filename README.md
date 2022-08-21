@@ -119,8 +119,7 @@ func SampleTest(t *testing.T) {
 }
 ```
 
-- Support when called `t.Setenv()` in test
-- Support when called `time.Now()` in test
+- [x] Support when called `t.Setenv()` in test
 - [x] Ignore specified directories with cli option -i/-ignore.
 - Able to ignore main/sub test function by tparagen:ignore comment.
 
