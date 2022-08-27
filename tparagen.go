@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,7 +88,7 @@ type tparagen struct {
 }
 
 func (t *tparagen) run() error {
-	return filepath.Walk(t.in, func(path string, info os.FileInfo, err error) error {
+	return filepath.WalkDir(t.in, func(path string, info fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
