@@ -279,8 +279,7 @@ func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
 }
 
 func exprCallHasMethod(node ast.Node, receiverName, methodName string) bool {
-	switch n := node.(type) {
-	case *ast.CallExpr:
+	if n, ok := node.(*ast.CallExpr); ok {
 		if fun, ok := n.Fun.(*ast.SelectorExpr); ok {
 			if receiver, ok := fun.X.(*ast.Ident); ok {
 				return receiver.Name == receiverName && fun.Sel.Name == methodName
@@ -349,9 +348,8 @@ func getRunCallbackParameterName(node ast.Node) string {
 
 func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
 	var methodParallelCalled bool
-	// nolint: gocritic
-	switch callExp := node.(type) {
-	case *ast.CallExpr:
+
+	if callExp, ok := node.(*ast.CallExpr); ok {
 		for _, arg := range callExp.Args {
 			if !methodParallelCalled {
 				ast.Inspect(arg, func(n ast.Node) bool {
