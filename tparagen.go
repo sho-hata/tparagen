@@ -14,8 +14,6 @@ import (
 	"github.com/saracen/walker"
 )
 
-var ErrFlagTrue = errors.New("find error")
-
 // Run is entry point.
 func Run(args []string, outStream, errStream io.Writer) error {
 	var tparagen *tparagen
@@ -25,12 +23,7 @@ func Run(args []string, outStream, errStream io.Writer) error {
 		return err
 	}
 
-	err = tparagen.run()
-	if tparagen.errFlag {
-		err = ErrFlagTrue
-	}
-
-	return err
+	return tparagen.run()
 }
 
 func fill(args []string, outStream, errStream io.Writer) (*tparagen, error) {
