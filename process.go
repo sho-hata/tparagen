@@ -237,7 +237,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 	// gofmt
 	var fmtedBuf bytes.Buffer
 	if err := format.Node(&fmtedBuf, fs, f); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("gofmt error occurred. %w", err)
 	}
 
 	return fmtedBuf.Bytes(), nil

@@ -102,25 +102,27 @@ func (t *tparagen) run() error {
 
 		f, err := os.OpenFile(path, os.O_RDWR, 0664)
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot open %s. %w", path, err)
 		}
 		defer f.Close()
 		b, err := io.ReadAll(f)
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot read %s. %w", path, err)
 		}
 
 		got, err := Process(path, b)
 		if err != nil {
-			return err
+			return fmt.Errorf("error occurred in Process(). %w", err)
 		}
 
 		if !bytes.Equal(b, got) {
 			if len(t.dest) != 0 && t.in != t.dest {
-				return t.writeOtherPath(t.in, t.dest, path, got)
+				if err := t.writeOtherPath(t.in, t.dest, path, got); err != nil {
+					return fmt.Errorf("error occurred in triteOtherPath(). %w", err)
+				}
 			}
 			if _, err := f.WriteAt(got, 0); err != nil {
-				return err
+				return fmt.Errorf("error occurred in writeAt(). %w", err)
 			}
 		}
 
