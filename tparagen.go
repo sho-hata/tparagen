@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/saracen/walker"
 )
 
 var ErrFlagTrue = errors.New("find error")
@@ -88,11 +90,7 @@ type tparagen struct {
 }
 
 func (t *tparagen) run() error {
-	return filepath.WalkDir(t.in, func(path string, info fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
+	return walker.Walk(t.in, func(path string, info fs.FileInfo) error {
 		if info.IsDir() && t.skipDir(path) {
 			return filepath.SkipDir
 		}
