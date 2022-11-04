@@ -18,7 +18,7 @@ func SampleTest(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(x *testing.T) {
 			x.Parallel()
-      // do anything...
+			// do anything...
 		})
 	}
 }
