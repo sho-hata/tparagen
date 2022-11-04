@@ -27,8 +27,10 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 	typesInfo := &types.Info{Defs: map[*ast.Ident]types.Object{}}
 
-	var funcHasSetenv bool
-	var funcHasParallelMethod bool
+	var (
+		funcHasSetenv         bool
+		funcHasParallelMethod bool
+	)
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		funcDecl, ok := n.(*ast.FuncDecl)
@@ -42,8 +44,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 		}
 
 		for _, l := range funcDecl.Body.List {
-			switch v := l.(type) {
-			case *ast.ExprStmt:
+			if v, ok := l.(*ast.ExprStmt); ok {
 				ast.Inspect(v, func(n ast.Node) bool {
 					// Check if the t.Run within the test function is calling t.Parallel
 					if methodRunIsCalledInTestFunction(n, testVar) {
@@ -278,8 +279,7 @@ func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
 }
 
 func exprCallHasMethod(node ast.Node, receiverName, methodName string) bool {
-	switch n := node.(type) {
-	case *ast.CallExpr:
+	if n, ok := node.(*ast.CallExpr); ok {
 		if fun, ok := n.Fun.(*ast.SelectorExpr); ok {
 			if receiver, ok := fun.X.(*ast.Ident); ok {
 				return receiver.Name == receiverName && fun.Sel.Name == methodName
@@ -348,9 +348,8 @@ func getRunCallbackParameterName(node ast.Node) string {
 
 func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
 	var methodParallelCalled bool
-	// nolint: gocritic
-	switch callExp := node.(type) {
-	case *ast.CallExpr:
+
+	if callExp, ok := node.(*ast.CallExpr); ok {
 		for _, arg := range callExp.Args {
 			if !methodParallelCalled {
 				ast.Inspect(arg, func(n ast.Node) bool {
@@ -371,9 +370,8 @@ func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
 
 func methodSetEnvIsCalledInMethodRun(node ast.Node, testVar string) bool {
 	var methodSetenvCalled bool
-	// nolint: gocritic
-	switch callExp := node.(type) {
-	case *ast.CallExpr:
+
+	if callExp, ok := node.(*ast.CallExpr); ok {
 		for _, arg := range callExp.Args {
 			if !methodSetenvCalled {
 				ast.Inspect(arg, func(n ast.Node) bool {
