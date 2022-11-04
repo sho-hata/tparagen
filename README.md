@@ -78,7 +78,7 @@ func SampleTest(t *testing.T) {
 ```
 
 ## Demo
-![demo](doc/generate_demo.gif)
+![demo](/doc/tparagen.gif)
 
 ## Features
 - [x] Insert RunParallel helper function into the main/sub test function.
@@ -110,7 +110,7 @@ func SampleTest(t *testing.T) {
 	}{{name: "foo"}}
 	for _, tc := range testCases {
 		tc := tc
-		 // ^ tc variable reinitialized
+		// ^ tc variable reinitialized
 		t.Run(tc.name, func(x *testing.T) {
 			x.Parallel()
 			fmt.Println(tc.name)
