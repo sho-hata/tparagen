@@ -78,7 +78,7 @@ func SampleTest(t *testing.T) {
 ```
 
 ## Demo
-![demo](doc/generate_demo.gif)
+![demo](/doc/tparagen.gif)
 
 ## Features
 - [x] Insert RunParallel helper function into the main/sub test function.
