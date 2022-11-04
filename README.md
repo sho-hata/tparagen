@@ -81,9 +81,6 @@ func SampleTest(t *testing.T) {
 ![demo](/doc/tparagen.gif)
 
 ## Features
-- [x] Insert RunParallel helper function into the main/sub test function.
-- [x] is called in the range method and test case variable tc being used, but is not reinitialised
-
 Before code is below,
 
 ```go
@@ -119,9 +116,15 @@ func SampleTest(t *testing.T) {
 }
 ```
 
-- [x] Support when called `t.Setenv()` in test
-- [x] Ignore specified directories with cli option -i/-ignore.
+### The following cases are supported
+- [x] Insert RunParallel helper function into the main/sub test function.
+- [x] Is called in the range method and test case variable tc being used, but is not reinitialised
+- [x] Do not insert if `t.Setenv()` is called in the test function
+- [x] Ignore specified directories with cli option -i/-ignore
+
+### The following cases are not supported
 - Able to ignore main/sub test function by tparagen:ignore comment.
+- Don't insert if the test function calls another function that calls `Setenv()`.
 
 ## Synopsis
 ```
