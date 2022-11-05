@@ -79,7 +79,6 @@ type tparagen struct {
 	in, dest             string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
-	errFlag              bool
 }
 
 func (t *tparagen) run() error {
