@@ -16,8 +16,8 @@ func main() {
 	}
 
 	if time.Since(now).Seconds() < 0.01 {
-		fmt.Printf("Done in %vms\n", time.Since(now).Milliseconds())
+		fmt.Printf("✨ Done in %dms\n", time.Since(now).Milliseconds())
 	} else {
-		fmt.Printf("Done in %vs\n", time.Since(now).Seconds())
+		fmt.Printf("✨ Done in %ss\n", fmt.Sprintf("%.2f", time.Since(now).Seconds()))
 	}
 }

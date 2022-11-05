@@ -10,9 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-)
 
-var ErrFlagTrue = errors.New("find error")
+	"github.com/saracen/walker"
+)
 
 // Run is entry point.
 func Run(args []string, outStream, errStream io.Writer) error {
@@ -23,12 +23,7 @@ func Run(args []string, outStream, errStream io.Writer) error {
 		return err
 	}
 
-	err = tparagen.run()
-	if tparagen.errFlag {
-		err = ErrFlagTrue
-	}
-
-	return err
+	return tparagen.run()
 }
 
 func fill(args []string, outStream, errStream io.Writer) (*tparagen, error) {
@@ -84,15 +79,10 @@ type tparagen struct {
 	in, dest             string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
-	errFlag              bool
 }
 
 func (t *tparagen) run() error {
-	return filepath.WalkDir(t.in, func(path string, info fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
+	return walker.Walk(t.in, func(path string, info fs.FileInfo) error {
 		if info.IsDir() && t.skipDir(path) {
 			return filepath.SkipDir
 		}
@@ -111,25 +101,27 @@ func (t *tparagen) run() error {
 
 		f, err := os.OpenFile(path, os.O_RDWR, 0664)
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot open %s. %w", path, err)
 		}
 		defer f.Close()
 		b, err := io.ReadAll(f)
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot read %s. %w", path, err)
 		}
 
 		got, err := Process(path, b)
 		if err != nil {
-			return err
+			return fmt.Errorf("error occurred in Process(). %w", err)
 		}
 
 		if !bytes.Equal(b, got) {
 			if len(t.dest) != 0 && t.in != t.dest {
-				return t.writeOtherPath(t.in, t.dest, path, got)
+				if err := t.writeOtherPath(t.in, t.dest, path, got); err != nil {
+					return fmt.Errorf("error occurred in triteOtherPath(). %w", err)
+				}
 			}
 			if _, err := f.WriteAt(got, 0); err != nil {
-				return err
+				return fmt.Errorf("error occurred in writeAt(). %w", err)
 			}
 		}
 
