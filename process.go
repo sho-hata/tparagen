@@ -47,7 +47,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 			if v, ok := l.(*ast.ExprStmt); ok {
 				ast.Inspect(v, func(n ast.Node) bool {
 					// Check if the t.Run within the test function is calling t.Parallel
-					if methodRunIsCalledInTestFunction(n, testVar) {
+					if hasRunMethod(n, testVar) {
 						return false
 					}
 
@@ -55,11 +55,11 @@ func Process(filename string, src []byte) ([]byte, error) {
 					// If t.Parallel() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod` becomes true.
 					// Therefore, also check the flag indicating whether the subtest has already been inserted or not.
 					if !funcHasParallelMethod {
-						funcHasParallelMethod = methodParallelIsCalledInTestFunction(n, testVar)
+						funcHasParallelMethod = hasParallelMethod(n, testVar)
 					}
 
 					if !funcHasSetenv {
-						funcHasSetenv = methodSetenvIsCalledInTestFunction(n, testVar)
+						funcHasSetenv = hasSetenvMethod(n, testVar)
 					}
 
 					return true
@@ -97,7 +97,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 			case *ast.ExprStmt:
 				ast.Inspect(v, func(n ast.Node) bool {
 					// Check if the t.Run within the test function is calling t.Parallel
-					if !methodRunIsCalledInTestFunction(n, testVar) {
+					if !hasRunMethod(n, testVar) {
 						return true
 					}
 
@@ -111,10 +111,10 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 					ast.Inspect(v, func(p ast.Node) bool {
 						if !hasParallel {
-							hasParallel = methodParallelIsCalledInTestFunction(p, innerTestVar)
+							hasParallel = hasParallelMethod(p, innerTestVar)
 						}
 						if !hasSetEnv {
-							hasSetEnv = methodSetenvIsCalledInTestFunction(p, innerTestVar)
+							hasSetEnv = hasSetenvMethod(p, innerTestVar)
 						}
 
 						return true
@@ -150,7 +150,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 				ast.Inspect(v, func(n ast.Node) bool {
 					switch n := n.(type) {
 					case *ast.ExprStmt:
-						if !methodRunIsCalledInRangeStatement(n.X, testVar) {
+						if !hasRunMethod(n.X, testVar) {
 							return true
 						}
 						// e.X is a call to t.Run; find out the name of the subtest's *testing.T parameter.
@@ -200,7 +200,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 				if r, ok := rangeNode.(*ast.RangeStmt); ok {
 					for _, n := range r.Body.List {
 						if e, ok := n.(*ast.ExprStmt); ok {
-							if !methodRunIsCalledInRangeStatement(e.X, testVar) {
+							if !hasRunMethod(e.X, testVar) {
 								continue
 							}
 
@@ -290,28 +290,16 @@ func exprCallHasMethod(node ast.Node, receiverName, methodName string) bool {
 	return false
 }
 
-func methodParallelIsCalledInTestFunction(node ast.Node, testVar string) bool {
+func hasParallelMethod(node ast.Node, testVar string) bool {
 	return exprCallHasMethod(node, testVar, "Parallel")
 }
 
-func methodSetenvIsCalledInTestFunction(node ast.Node, testVar string) bool {
-	return exprCallHasMethod(node, testVar, "Setenv")
-}
-
-func methodRunIsCalledInTestFunction(node ast.Node, testVar string) bool {
+func hasRunMethod(node ast.Node, testVar string) bool {
 	return exprCallHasMethod(node, testVar, "Run")
 }
 
-func methodRunIsCalledInRangeStatement(node ast.Node, testVar string) bool {
-	return exprCallHasMethod(node, testVar, "Run")
-}
-
-func methodSetEnvIsCalledInRunMethod(node ast.Node, testVar string) bool {
+func hasSetenvMethod(node ast.Node, testVar string) bool {
 	return exprCallHasMethod(node, testVar, "Setenv")
-}
-
-func methodParallelIsCalledInRunMethod(node ast.Node, testVar string) bool {
-	return exprCallHasMethod(node, testVar, "Parallel")
 }
 
 // In an expression of the form t.Run(x, func(q *testing.T) {...}), return the
@@ -354,7 +342,7 @@ func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
 			if !methodParallelCalled {
 				ast.Inspect(arg, func(n ast.Node) bool {
 					if !methodParallelCalled {
-						methodParallelCalled = methodParallelIsCalledInRunMethod(n, testVar)
+						methodParallelCalled = hasParallelMethod(n, testVar)
 
 						return true
 					}
@@ -376,7 +364,7 @@ func methodSetEnvIsCalledInMethodRun(node ast.Node, testVar string) bool {
 			if !methodSetenvCalled {
 				ast.Inspect(arg, func(n ast.Node) bool {
 					if !methodSetenvCalled {
-						methodSetenvCalled = methodSetEnvIsCalledInRunMethod(n, testVar)
+						methodSetenvCalled = hasSetenvMethod(n, testVar)
 
 						return true
 					}
