@@ -631,6 +631,25 @@ func TestFunctionMainAndSubHasSetenvWithRangeTest(t *testing.T) {
 }
 `,
 		},
+		{
+			testCase: "ignore all lint to file",
+			src: `//nolint
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+			want: `//nolint
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+		},
 	}
 
 	for _, tt := range tests {

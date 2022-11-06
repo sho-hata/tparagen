@@ -22,7 +22,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 	f, err := parser.ParseFile(fs, filename, src, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("cannot pase file. %w", err)
+		return nil, fmt.Errorf("cannot parse file. %w", err)
 	}
 
 	typesInfo := &types.Info{Defs: map[*ast.Ident]types.Object{}}
@@ -31,6 +31,14 @@ func Process(filename string, src []byte) ([]byte, error) {
 		funcHasSetenv         bool
 		funcHasParallelMethod bool
 	)
+
+	// check file nolint comment
+	// if a file has a nolint comment at the beginning, the file is removed from the target.
+	if len(f.Comments) != 0 {
+		if f.Comments[0].Text() == "nolint\n" {
+			return src, nil
+		}
+	}
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		funcDecl, ok := n.(*ast.FuncDecl)
