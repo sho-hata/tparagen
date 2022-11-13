@@ -22,7 +22,11 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 	f, err := parser.ParseFile(fs, filename, src, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("cannot pase file. %w", err)
+		return nil, fmt.Errorf("cannot parse file. %w", err)
+	}
+
+	if !isTparagenTargetFile(f.Comments) {
+		return src, nil
 	}
 
 	typesInfo := &types.Info{Defs: map[*ast.Ident]types.Object{}}
@@ -460,4 +464,31 @@ func loopVarReAssigned(assign *ast.AssignStmt, vars []types.Object, typeInfo *ty
 	}
 
 	return false
+}
+
+// check file top comment
+// if a file has a nolint comment at the beginning, the file is removed from the target.
+// also, if a specific linter (tparallel, paralleltest) is specified with a nolint comment, it is removed from the target.
+func isTparagenTargetFile(fileComments []*ast.CommentGroup) bool {
+	if len(fileComments) == 0 {
+		return true
+	}
+
+	if !strings.HasPrefix(fileComments[0].Text(), "nolint") {
+		return true
+	}
+
+	// ignore all linters case
+	if fileComments[0].Text() == "nolint\n" {
+		return false
+	}
+
+	// ignore tparallel, paralleltest case
+	for _, targetLinter := range []string{"tparallel", "paralleltest"} {
+		if strings.Contains(fileComments[0].Text(), targetLinter) {
+			return false
+		}
+	}
+
+	return true
 }

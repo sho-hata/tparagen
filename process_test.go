@@ -1,7 +1,6 @@
 package tparagen
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 )
@@ -631,18 +630,92 @@ func TestFunctionMainAndSubHasSetenvWithRangeTest(t *testing.T) {
 }
 `,
 		},
+		{
+			testCase: "ignore all lint to file",
+			src: `//nolint
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+			want: `//nolint
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+		},
+		{
+			testCase: "ignore paralleltest lint to file",
+			src: `//nolint paralleltest
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+			want: `//nolint paralleltest
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+		},
+		{
+			testCase: "ignore tparallel lint to file",
+			src: `//nolint tparallel
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+			want: `//nolint tparallel
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+		},
+		{
+			testCase: "ignore tparallel and paralleltest lint to file",
+			src: `//nolint tparallel,paralleltest
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+			want: `//nolint tparallel,paralleltest
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+		},
 	}
 
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.testCase, func(t *testing.T) {
 			t.Parallel()
-			if tt.testCase == "missing called t.Parallel in all tests" {
-				fmt.Print()
-			}
+
 			got, err := Process("./testdata/t/t_test.go", []byte(tt.src))
 			if err != nil {
-				t.Fatal(err)
+				t.Fatal(err.Error())
 			}
 			if !reflect.DeepEqual(got, []byte(tt.want)) {
 				t.Errorf("Process() = \n%v, want\n%v", string(got), tt.want)
