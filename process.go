@@ -32,8 +32,8 @@ func Process(filename string, src []byte) ([]byte, error) {
 	typesInfo := &types.Info{Defs: map[*ast.Ident]types.Object{}}
 
 	var (
-		funcHasSetenv   bool
-		funcHasParallel bool
+		testHasSetenv   bool
+		testHasParallel bool
 	)
 
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -50,21 +50,21 @@ func Process(filename string, src []byte) ([]byte, error) {
 		for _, l := range funcDecl.Body.List {
 			if s, ok := l.(*ast.ExprStmt); ok {
 				ast.Inspect(s, func(n ast.Node) bool {
-					// Check if the t.Run within the test function is calling t.Parallel
+					// Check if the Run() within the test function is calling t.Parallel
 					if hasRunMethod(n, testVar) {
 						return false
 					}
 
 					// Check if the test method is calling Parallel()
 					// If Parallel() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod`  is true.
-					if !funcHasParallel {
-						funcHasParallel = hasParallelMethod(n, testVar)
+					if !testHasParallel {
+						testHasParallel = hasParallelMethod(n, testVar)
 					}
 
 					// Check if the test method is calling Setenv()
 					// If Setenv() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod`  is true.
-					if !funcHasSetenv {
-						funcHasSetenv = hasSetenvMethod(n, testVar)
+					if !testHasSetenv {
+						testHasSetenv = hasSetenvMethod(n, testVar)
 					}
 
 					return true
@@ -98,21 +98,21 @@ func Process(filename string, src []byte) ([]byte, error) {
 						return true
 					}
 
-					var hasParallel, hasSetEnv bool
+					var subTestHasParallel, subTestHasSetEnv bool
 
 					ast.Inspect(s, func(p ast.Node) bool {
-						if !hasParallel {
-							hasParallel = hasParallelMethod(p, innerTestVar)
+						if !subTestHasParallel {
+							subTestHasParallel = hasParallelMethod(p, innerTestVar)
 						}
-						if !hasSetEnv {
-							hasSetEnv = hasSetenvMethod(p, innerTestVar)
+						if !subTestHasSetEnv {
+							subTestHasSetEnv = hasSetenvMethod(p, innerTestVar)
 						}
 
 						return true
 					})
 
 					// Check if the sub test calls t.Parallel.
-					if !hasParallel && !hasSetEnv {
+					if !subTestHasParallel && !subTestHasSetEnv {
 						if n, ok := n.(*ast.CallExpr); ok {
 							funcArg := n.Args[1]
 							// insert parallel helper method
@@ -143,7 +143,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 						if !hasRunMethod(n.X, testVar) {
 							return true
 						}
-						// e.X is a call to t.Run; find out the name of the subtest's *testing.T parameter.
+						// e.X is a call to Run(); find out the name of the subtest's *testing.T parameter.
 						innerTestVar := getRunCallbackParameterName(n.X)
 
 						rangeStatementOverTestCasesExists = true
@@ -173,7 +173,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 		}
 
 		// Check if the main test calls Parallel().
-		if !funcHasParallel && !funcHasSetenv {
+		if !testHasParallel && !testHasSetenv {
 			tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace)
 			funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
 		}
