@@ -32,8 +32,8 @@ func Process(filename string, src []byte) ([]byte, error) {
 	typesInfo := &types.Info{Defs: map[*ast.Ident]types.Object{}}
 
 	var (
-		funcHasSetenv         bool
-		funcHasParallelMethod bool
+		funcHasSetenv   bool
+		funcHasParallel bool
 	)
 
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -48,20 +48,21 @@ func Process(filename string, src []byte) ([]byte, error) {
 		}
 
 		for _, l := range funcDecl.Body.List {
-			if v, ok := l.(*ast.ExprStmt); ok {
-				ast.Inspect(v, func(n ast.Node) bool {
+			if s, ok := l.(*ast.ExprStmt); ok {
+				ast.Inspect(s, func(n ast.Node) bool {
 					// Check if the t.Run within the test function is calling t.Parallel
 					if hasRunMethod(n, testVar) {
 						return false
 					}
 
-					// Check if the test method is calling t.Parallel
-					// If t.Parallel() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod` becomes true.
-					// Therefore, also check the flag indicating whether the subtest has already been inserted or not.
-					if !funcHasParallelMethod {
-						funcHasParallelMethod = hasParallelMethod(n, testVar)
+					// Check if the test method is calling Parallel()
+					// If Parallel() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod`  is true.
+					if !funcHasParallel {
+						funcHasParallel = hasParallelMethod(n, testVar)
 					}
 
+					// Check if the test method is calling Setenv()
+					// If Setenv() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod`  is true.
 					if !funcHasSetenv {
 						funcHasSetenv = hasSetenvMethod(n, testVar)
 					}
@@ -69,20 +70,6 @@ func Process(filename string, src []byte) ([]byte, error) {
 					return true
 				})
 			}
-		}
-
-		return true
-	})
-
-	ast.Inspect(f, func(n ast.Node) bool {
-		funcDecl, ok := n.(*ast.FuncDecl)
-		if !ok {
-			return true
-		}
-		// Check runs for test functions only
-		isTest, testVar := isTestFunction(funcDecl)
-		if !isTest {
-			return true
 		}
 
 		var (
@@ -97,9 +84,9 @@ func Process(filename string, src []byte) ([]byte, error) {
 		)
 
 		for _, l := range funcDecl.Body.List {
-			switch v := l.(type) {
+			switch s := l.(type) {
 			case *ast.ExprStmt:
-				ast.Inspect(v, func(n ast.Node) bool {
+				ast.Inspect(s, func(n ast.Node) bool {
 					// Check if the t.Run within the test function is calling t.Parallel
 					if !hasRunMethod(n, testVar) {
 						return true
@@ -111,9 +98,9 @@ func Process(filename string, src []byte) ([]byte, error) {
 						return true
 					}
 
-					hasParallel, hasSetEnv := false, false
+					var hasParallel, hasSetEnv bool
 
-					ast.Inspect(v, func(p ast.Node) bool {
+					ast.Inspect(s, func(p ast.Node) bool {
 						if !hasParallel {
 							hasParallel = hasParallelMethod(p, innerTestVar)
 						}
@@ -132,7 +119,6 @@ func Process(filename string, src []byte) ([]byte, error) {
 							if fun, ok := funcArg.(*ast.FuncLit); ok {
 								tpStmt := buildTParallelStmt(fun.Body.Lbrace)
 								fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
-								// insertedSubtest = true
 							}
 						}
 					}
@@ -142,16 +128,16 @@ func Process(filename string, src []byte) ([]byte, error) {
 
 			// Check if the range over testcases is calling t.Parallel
 			case *ast.RangeStmt:
-				rangeNode = v
+				rangeNode = s
 
 				var loopVars []types.Object
-				for _, expr := range []ast.Expr{v.Key, v.Value} {
+				for _, expr := range []ast.Expr{s.Key, s.Value} {
 					if id, ok := expr.(*ast.Ident); ok {
 						loopVars = append(loopVars, typesInfo.ObjectOf(id))
 					}
 				}
 
-				ast.Inspect(v, func(n ast.Node) bool {
+				ast.Inspect(s, func(n ast.Node) bool {
 					switch n := n.(type) {
 					case *ast.ExprStmt:
 						if !hasRunMethod(n.X, testVar) {
@@ -186,8 +172,8 @@ func Process(filename string, src []byte) ([]byte, error) {
 			}
 		}
 
-		// Check if the main test calls t.Parallel.
-		if !funcHasParallelMethod && !funcHasSetenv {
+		// Check if the main test calls Parallel().
+		if !funcHasParallel && !funcHasSetenv {
 			tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace)
 			funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
 		}
@@ -339,14 +325,14 @@ func getRunCallbackParameterName(node ast.Node) string {
 }
 
 func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
-	var methodParallelCalled bool
+	var isCalledParallel bool
 
 	if callExp, ok := node.(*ast.CallExpr); ok {
 		for _, arg := range callExp.Args {
-			if !methodParallelCalled {
+			if !isCalledParallel {
 				ast.Inspect(arg, func(n ast.Node) bool {
-					if !methodParallelCalled {
-						methodParallelCalled = hasParallelMethod(n, testVar)
+					if !isCalledParallel {
+						isCalledParallel = hasParallelMethod(n, testVar)
 
 						return true
 					}
@@ -357,7 +343,7 @@ func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
 		}
 	}
 
-	return methodParallelCalled
+	return isCalledParallel
 }
 
 func methodSetEnvIsCalledInMethodRun(node ast.Node, testVar string) bool {
