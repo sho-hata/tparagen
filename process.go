@@ -41,6 +41,12 @@ func Process(filename string, src []byte) ([]byte, error) {
 		if !ok {
 			return true
 		}
+
+		// Check nolint target
+		if !isTparagenTargetFunc(funcDecl.Doc) {
+			return true
+		}
+
 		// Check runs for test functions only
 		isTest, testVar := isTestFunction(funcDecl)
 		if !isTest {
@@ -452,6 +458,16 @@ func loopVarReAssigned(assign *ast.AssignStmt, vars []types.Object, typeInfo *ty
 	return false
 }
 
+func hasNolintCommentDirective(cg *ast.CommentGroup) bool {
+	for _, c := range cg.List {
+		if c.Text == "//nolint" || strings.Contains(c.Text, "paralleltest") || strings.Contains(c.Text, "tparallel") {
+			return true
+		}
+	}
+
+	return true
+}
+
 // check file top comment
 // if a file has a nolint comment at the beginning, the file is removed from the target.
 // also, if a specific linter (tparallel, paralleltest) is specified with a nolint comment, it is removed from the target.
@@ -460,21 +476,19 @@ func isTparagenTargetFile(fileComments []*ast.CommentGroup) bool {
 		return true
 	}
 
-	if !strings.HasPrefix(fileComments[0].Text(), "nolint") {
-		return true
-	}
-
-	// ignore all linters case
-	if fileComments[0].Text() == "nolint\n" {
-		return false
-	}
-
-	// ignore tparallel, paralleltest case
-	for _, targetLinter := range []string{"tparallel", "paralleltest"} {
-		if strings.Contains(fileComments[0].Text(), targetLinter) {
-			return false
-		}
+	if fileComments[0].Pos() == 1 {
+		return !hasNolintCommentDirective(fileComments[0])
 	}
 
 	return true
+}
+
+// if a function has a nolint comment, the function is removed from the target.
+// also, if a specific linter (tparallel, paralleltest) is specified with a nolint comment, it is removed from the target.
+func isTparagenTargetFunc(funcComment *ast.CommentGroup) bool {
+	if funcComment == nil {
+		return true
+	}
+
+	return !hasNolintCommentDirective(funcComment)
 }
