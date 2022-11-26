@@ -706,6 +706,112 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 	t.Run("hoge", nil)
 }`,
 		},
+		{
+			testCase: "ignore paralleltest lint to file",
+			src: `//nolint:paralleltest
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+			want: `//nolint:paralleltest
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+		},
+		{
+			testCase: "ignore tparallel lint to file",
+			src: `//nolint:tparallel
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+			want: `//nolint:tparallel
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+		},
+		{
+			testCase: "ignore tparallel and paralleltest lint to file",
+			src: `//nolint:tparallel,paralleltest
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+			want: `//nolint:tparallel,paralleltest
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+		},
+		{
+			testCase: "ignore tparallel and paralleltest lint to main test",
+			src: `package t
+
+import "testing"
+
+//nolint:tparallel,paralleltest
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+			want: `package t
+
+import "testing"
+
+//nolint:tparallel,paralleltest
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}
+`,
+		},
+		{
+			testCase: "ignore tparallel and paralleltest lint to main test once",
+			src: `package t
+
+import "testing"
+
+//nolint:tparallel,paralleltest
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}`,
+			want: `package t
+
+import "testing"
+
+//nolint:tparallel,paralleltest
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Parallel()
+	t.Run("hoge", nil)
+}
+`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -718,7 +824,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 				t.Fatal(err.Error())
 			}
 			if !reflect.DeepEqual(got, []byte(tt.want)) {
-				t.Errorf("Process() = \n%v, want\n%v", string(got), tt.want)
+				t.Errorf("result:\n%v, want:\n%v", string(got), tt.want)
 			}
 		})
 	}

@@ -121,9 +121,9 @@ func SampleTest(t *testing.T) {
 - [x] Is called in the range method and test case variable tc being used, but is not reinitialised
 - [x] Do not insert if `t.Setenv()` is called in the test function
 - [x] Ignore specified directories with cli option -i/-ignore
+- [x] nolint comment support: parallel,paralleltest
 
 ### The following cases are not supported
-- Able to ignore main/sub test function by tparagen:ignore comment.
 - Don't insert if the test function calls another function that calls `Setenv()`.
 
 ## Synopsis
