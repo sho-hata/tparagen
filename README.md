@@ -147,7 +147,7 @@ Usage of tparagen:
 ```
 ## Installation
 ```
-go install -v github.com/sho-hata/tparagen/cmd/tparagen@latest
+go instal github.com/sho-hata/tparagen/cmd/tparagen@latest
 ```
 
 
