@@ -2,7 +2,7 @@
 tparagen insert `testing.T.Parallel()` in a test function in a specific source file or in an entire directory.
 
 
-[![test_lint](https://github.com/sho-hata/tparagen/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/sho-hata/tparagen/actions/workflows/test.yml)
+[![ci](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml)
 
 ## Background
 To run go tests in parallel, you need to insert `testing.T.Parallel()` into the main/sub test you want to run in parallel.
