@@ -1,7 +1,10 @@
-name: test-lint
-
-on: [push, pull_request]
-
+name: "tparagen"
+on: 
+  pull_request:
+    types:
+    - opened
+    - synchronize
+    - reopened
 jobs:
   setup:
     runs-on: ubuntu-latest
@@ -13,14 +16,6 @@ jobs:
         id: go
       - name: check out
         uses: actions/checkout@v3
-
-  build:
-    needs: setup
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: build
-        run: go build ./...
 
   test:
     needs: setup
