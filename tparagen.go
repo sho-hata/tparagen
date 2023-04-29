@@ -2,8 +2,6 @@ package tparagen
 
 import (
 	"bytes"
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,65 +12,27 @@ import (
 	"github.com/saracen/walker"
 )
 
+const (
+	defaultTargetDir = "./"
+	defaultIgnoreDir = "testdata"
+)
+
 // Run is entry point.
-func Run(args []string, outStream, errStream io.Writer) error {
-	var tparagen *tparagen
-
-	tparagen, err := fill(args, outStream, errStream)
-	if err != nil {
-		return err
-	}
-
-	return tparagen.run()
-}
-
-func fill(args []string, outStream, errStream io.Writer) (*tparagen, error) {
-	cn := args[0]
-	flags := flag.NewFlagSet(cn, flag.ContinueOnError)
-	flags.SetOutput(errStream)
-	flags.Usage = func() {
-		fmt.Fprintf(
-			flag.CommandLine.Output(),
-			"tparagen inserts `testing.T.Parallel()` in a test function in a specific source file or in an entire directory.\n\nUsage of %s:\n",
-			os.Args[0],
-		)
-		flags.PrintDefaults()
-	}
-
-	var ignoreDirsString string
-	idesc := "ignore directory names. ex: foo,bar,baz\n(testdata directory is always ignored.)"
-	flags.StringVar(&ignoreDirsString, "ignore", "", idesc)
-	flags.StringVar(&ignoreDirsString, "i", "", idesc)
-
-	var destDir string
-
-	if err := flags.Parse(args[1:]); err != nil {
-		return nil, err
-	}
-
-	ignoreDirs := []string{"testdata"}
+func Run(outStream, errStream io.Writer, ignoreDirectories []string) error {
+	ignoreDirs := []string{defaultIgnoreDir}
 	if len(ignoreDirs) != 0 {
-		ignoreDirs = append(ignoreDirs, strings.Split(ignoreDirsString, ",")...)
+		ignoreDirs = append(ignoreDirs, ignoreDirectories...)
 	}
 
-	targetDir := "./"
-
-	nargs := flags.Args()
-	if len(nargs) > 1 {
-		return nil, errors.New("execution path must be only one or no-set(current directory)")
-	}
-
-	if len(nargs) == 1 {
-		targetDir = nargs[0]
-	}
-
-	return &tparagen{
-		in:         targetDir,
-		dest:       destDir,
+	t := &tparagen{
+		in:         defaultTargetDir,
+		dest:       "",
 		outStream:  outStream,
 		errStream:  errStream,
 		ignoreDirs: ignoreDirs,
-	}, nil
+	}
+
+	return t.run()
 }
 
 type tparagen struct {
@@ -145,13 +105,9 @@ func (t *tparagen) writeOtherPath(in, dist, path string, got []byte) error {
 
 	if _, err := os.Stat(dpd); os.IsNotExist(err) {
 		if err := os.Mkdir(dpd, 0777); err != nil {
-			fmt.Fprintf(t.outStream, "create dir failed at %q: %v\n", dpd, err)
-
-			return err
+			return fmt.Errorf("create dir failed at %q: %w", dpd, err)
 		}
 	}
-
-	fmt.Fprintf(t.outStream, "update file %q\n", dp)
 
 	f, err := os.OpenFile(dp, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
@@ -160,10 +116,8 @@ func (t *tparagen) writeOtherPath(in, dist, path string, got []byte) error {
 	defer f.Close()
 
 	if _, err = f.Write(got); err != nil {
-		fmt.Fprintf(t.outStream, "write file failed %v\n", err)
+		return fmt.Errorf("write file failed at %q: %w", dp, err)
 	}
-
-	fmt.Printf("created at %q\n", dp)
 
 	return nil
 }

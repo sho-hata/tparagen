@@ -7,6 +7,7 @@ import (
 
 func TestProcess(t *testing.T) {
 	t.Parallel()
+	// t.Parallel()
 
 	tests := []struct {
 		testCase string

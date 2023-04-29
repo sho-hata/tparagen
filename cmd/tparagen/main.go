@@ -3,15 +3,25 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/alecthomas/kingpin/v2"
 	"github.com/sho-hata/tparagen"
+)
+
+var (
+	ignoreDirectories = kingpin.Flag("ignore", "ignore directory names. ex: foo,bar,baz\n(testdata directory is always ignored.)").String()
 )
 
 func main() {
 	now := time.Now()
-	if err := tparagen.Run(os.Args, os.Stdout, os.Stderr); err != nil {
-		fmt.Print(err.Error())
+
+	kingpin.Parse()
+	kingpin.HelpFlag.Short('h')
+
+	if err := tparagen.Run(os.Stdout, os.Stderr, strings.Split(*ignoreDirectories, ",")); err != nil {
+		fmt.Println(err.Error())
 		os.Exit(1)
 	}
 

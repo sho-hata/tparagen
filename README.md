@@ -133,16 +133,13 @@ $ tparagen
 
 ## Options
 ```
-$ tparagen -h
-tparagen inserts `testing.T.Parallel()` in a test function in a specific source file or in an entire directory.
+$ tparagen --help
+usage: tparagen [<flags>]
 
-Usage of tparagen:
-  -i string
-        ignore directory names. ex: foo,bar,baz
-        (testdata directory is always ignored.)
-  -ignore string
-        ignore directory names. ex: foo,bar,baz
-        (testdata directory is always ignored.)
+
+Flags:
+      --[no-]help      Show context-sensitive help (also try --help-long and --help-man).
+  -i, --ignore=IGNORE  ignore directory names. ex: foo,bar,baz (testdata directory is always ignored.)
 
 ```
 ## Installation
