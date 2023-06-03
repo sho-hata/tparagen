@@ -1,11 +1,11 @@
 # tparagen
-tparagen insert `testing.T.Parallel()` in a test function in a specific source file or in an entire directory.
+tparagen insert `testing/T.Parallel()` in a test function in a specific source file or in an entire directory.
 
 
 [![ci](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml)
 
 ## Background
-To run go tests in parallel, you need to insert `testing.T.Parallel()` into the main/sub test you want to run in parallel.
+To run go tests in parallel, you need to insert `testing/T.Parallel()` into the main/sub test you want to run in parallel.
 
 ```go
 func SampleTest(t *testing.T) {
@@ -24,10 +24,10 @@ func SampleTest(t *testing.T) {
 }
 ```
 
-If there is your application in production already, you must add a `testing.T.Parallel()` into any main/sub test. It is a very time-consuming and tedious task.
+If there is your application in production already, you must add a `testing/T.Parallel()` into any main/sub test. It is a very time-consuming and tedious task.
 
 ## Description
-tparagen is cli tool for insert `testing.T.Parallel()` into all main/sub test in specified directory.
+tparagen is cli tool for insert `testing/T.Parallel()` into all main/sub test in specified directory.
 
 Before code is below,
 
