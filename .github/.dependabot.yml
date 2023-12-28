@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: 'gomod'
+    schedule:
+      interval: 'weekly'
+      day: 'saturday'
+      time: '09:30'
+      timezone: 'Asia/Tokyo'
+    groups:
+      minor-patch:
+        update-types:
+          - 'minor'
+          - 'patch'
