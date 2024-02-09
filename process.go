@@ -17,7 +17,7 @@ const (
 	testPrefix            = "Test"
 )
 
-func Process(filename string, src []byte) ([]byte, error) {
+func Process(filename string, src []byte, needFixLoopVar bool) ([]byte, error) {
 	fs := token.NewFileSet()
 
 	f, err := parser.ParseFile(fs, filename, src, parser.ParseComments)
@@ -214,7 +214,7 @@ func Process(filename string, src []byte) ([]byte, error) {
 							}
 						}
 					}
-					if loopVariableUsedInRun != nil && !loopVarReInitialized {
+					if needFixLoopVar && loopVariableUsedInRun != nil && !loopVarReInitialized {
 						// insert loop var reassignment statement
 						if v, ok := r.Value.(*ast.Ident); ok {
 							lv := buildLoopVarReAssignmentStmt(r.Body.Lbrace, v.Name)

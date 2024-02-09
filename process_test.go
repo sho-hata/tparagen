@@ -820,7 +820,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 		t.Run(tt.testCase, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := Process("./testdata/t/t_test.go", []byte(tt.src))
+			got, err := Process("./testdata/t/t_test.go", []byte(tt.src), true)
 			if err != nil {
 				t.Fatal(err.Error())
 			}

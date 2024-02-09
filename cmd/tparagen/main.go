@@ -12,6 +12,7 @@ import (
 
 var (
 	ignoreDirectories = kingpin.Flag("ignore", "ignore directory names. ex: foo,bar,baz\n(testdata directory is always ignored.)").String()
+	minGoVersion      = kingpin.Flag("min-go-version", "minimum go version").Default("1.21").Float64()
 )
 
 func main() {
@@ -20,7 +21,7 @@ func main() {
 	kingpin.Parse()
 	kingpin.HelpFlag.Short('h')
 
-	if err := tparagen.Run(os.Stdout, os.Stderr, strings.Split(*ignoreDirectories, ",")); err != nil {
+	if err := tparagen.Run(os.Stdout, os.Stderr, strings.Split(*ignoreDirectories, ","), *minGoVersion); err != nil {
 		fmt.Println(err.Error())
 		os.Exit(1)
 	}

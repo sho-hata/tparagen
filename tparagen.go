@@ -13,12 +13,13 @@ import (
 )
 
 const (
-	defaultTargetDir = "./"
-	defaultIgnoreDir = "testdata"
+	defaultTargetDir     = "./"
+	defaultIgnoreDir     = "testdata"
+	fixingForLoopVersion = 1.22
 )
 
 // Run is entry point.
-func Run(outStream, errStream io.Writer, ignoreDirectories []string) error {
+func Run(outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion float64) error {
 	ignoreDirs := []string{defaultIgnoreDir}
 	if len(ignoreDirs) != 0 {
 		ignoreDirs = append(ignoreDirs, ignoreDirectories...)
@@ -32,6 +33,10 @@ func Run(outStream, errStream io.Writer, ignoreDirectories []string) error {
 		ignoreDirs: ignoreDirs,
 	}
 
+	if minGoVersion < fixingForLoopVersion {
+		t.needFixLoopVar = true
+	}
+
 	return t.run()
 }
 
@@ -39,6 +44,7 @@ type tparagen struct {
 	in, dest             string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
+	needFixLoopVar       bool
 }
 
 func (t *tparagen) run() error {
@@ -69,7 +75,7 @@ func (t *tparagen) run() error {
 			return fmt.Errorf("cannot read %s. %w", path, err)
 		}
 
-		got, err := Process(path, b)
+		got, err := Process(path, b, t.needFixLoopVar)
 		if err != nil {
 			return fmt.Errorf("error occurred in Process(). %w", err)
 		}
