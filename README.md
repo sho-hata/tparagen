@@ -15,7 +15,6 @@ func SampleTest(t *testing.T) {
 		name string
 	}{{name: "foo"}}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(x *testing.T) {
 			x.Parallel()
 			// do anything...
@@ -53,6 +52,34 @@ func SampleTest(t *testing.T) {
 ```
 
 After execute `tparagen`, modified code is below.
+
+### go version >= 1.22
+
+```go
+package test
+
+import (
+	"fmt"
+	"testing"
+)
+
+func SampleTest(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(x *testing.T) {
+			x.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}
+```
+
+### go version < 1.21
+
 ```go
 package test
 
@@ -80,45 +107,10 @@ func SampleTest(t *testing.T) {
 ## Demo
 ![demo](/doc/tparagen.gif)
 
-## Features
-Before code is below,
-
-```go
-func SampleTest(t *testing.T) {
-
-	testCases := []struct {
-		name string
-	}{{name: "foo"}}
-	for _, tc := range testCases {
-		t.Run(tc.name, func(x *testing.T) {
-			fmt.Println(tc.name)
-		})
-	}
-}
-```
-
-After execute `tparagen`, modified code is below.
-```go
-func SampleTest(t *testing.T) {
-	t.Parallel()
-
-	testCases := []struct {
-		name string
-	}{{name: "foo"}}
-	for _, tc := range testCases {
-		tc := tc
-		// ^ tc variable reinitialized
-		t.Run(tc.name, func(x *testing.T) {
-			x.Parallel()
-			fmt.Println(tc.name)
-		})
-	}
-}
-```
 
 ### The following cases are supported
 - [x] Insert RunParallel helper function into the main/sub test function.
-- [x] Is called in the range method and test case variable tc being used, but is not reinitialised
+- [x] Loop variables are not re-initialised if the minimum version of Go is less than 1.22
 - [x] Do not insert if `t.Setenv()` is called in the test function
 - [x] Ignore specified directories with cli option -i/-ignore
 - [x] nolint comment support: parallel,paralleltest
@@ -138,8 +130,9 @@ usage: tparagen [<flags>]
 
 
 Flags:
-      --[no-]help      Show context-sensitive help (also try --help-long and --help-man).
-  -i, --ignore=IGNORE  ignore directory names. ex: foo,bar,baz (testdata directory is always ignored.)
+  --[no-]help            Show context-sensitive help (also try --help-long and --help-man).
+  --ignore=IGNORE        ignore directory names. ex: foo,bar,baz (testdata directory is always ignored.)
+  --min-go-version=1.21  minimum go version
 
 ```
 ## Installation
