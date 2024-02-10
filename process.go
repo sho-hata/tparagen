@@ -214,6 +214,8 @@ func Process(filename string, src []byte, needFixLoopVar bool) ([]byte, error) {
 							}
 						}
 					}
+					// https://tip.golang.org/doc/go1.22
+					// Loop variables are not re-initialised if the minimum version of Go is less than 1.22
 					if needFixLoopVar && loopVariableUsedInRun != nil && !loopVarReInitialized {
 						// insert loop var reassignment statement
 						if v, ok := r.Value.(*ast.Ident); ok {
