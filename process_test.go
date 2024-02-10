@@ -8,18 +8,14 @@ import (
 func TestProcess(t *testing.T) {
 	t.Parallel()
 
-	t.Run("needFixLoopVar is true", func(t *testing.T) {
-		
-	})
-
 	tests := []struct {
-		testCase string
-		src      string
+		testCase       string
+		src            string
 		needFixLoopVar bool
-		want     string
+		want           string
 	}{
 		{
-			testCase: "no a test function",
+			testCase:       "no a test function",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -31,7 +27,7 @@ func NoTestFunction() {}
 `,
 		},
 		{
-			testCase: "looks like a test but is with param",
+			testCase:       "looks like a test but is with param",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -43,7 +39,7 @@ func TestingFunctionLooksLikeATestButIsWithParam(i int) {}
 `,
 		},
 		{
-			testCase: "test function but empty body",
+			testCase:       "test function but empty body",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -55,7 +51,7 @@ func AbcFunctionSuccessful(t *testing.T) {}
 `,
 		},
 		{
-			testCase: "missing called t.Parallel in main test",
+			testCase:       "missing called t.Parallel in main test",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -75,7 +71,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 `,
 		},
 		{
-			testCase: "called t.Parallel in main test",
+			testCase:       "called t.Parallel in main test",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -96,7 +92,7 @@ func TestFunctionHasParallelInMain(t *testing.T) {
 `,
 		},
 		{
-			testCase: "missing called t.Parallel in a sub test",
+			testCase:       "missing called t.Parallel in a sub test",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -125,7 +121,7 @@ func TestFunctionHasParallelInMainOneTestRunMissingHasParallel(t *testing.T) {
 `,
 		},
 		{
-			testCase: "missing called t.Parallel in all tests not range",
+			testCase:       "missing called t.Parallel in all tests not range",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -158,7 +154,7 @@ func TestFunctionMissingParallelAllTests(t *testing.T) {
 `,
 		},
 		{
-			testCase: "t",
+			testCase:       "t",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -185,7 +181,7 @@ func TestFunctionMissingParallelInMainSubTestHasParallel(t *testing.T) {
 `,
 		},
 		{
-			testCase: "missing called t.Parallel in multiple sub tests",
+			testCase:       "missing called t.Parallel in multiple sub tests",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -223,7 +219,7 @@ func TestFunctionMissingParallelInTwoTestMainTestHasParallel(t *testing.T) {
 `,
 		},
 		{
-			testCase: "first one test run missing to parallel",
+			testCase:       "first one test run missing to parallel",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -262,7 +258,7 @@ func TestFunctionMissingParallelInFirstOneTestMainTestHasParallel(t *testing.T) 
 `,
 		},
 		{
-			testCase: "second one test run missing call to parallel",
+			testCase:       "second one test run missing call to parallel",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -301,7 +297,7 @@ func TestFunctionMissingParallelInSecondOneTestMainTestHasParallel(t *testing.T)
 `,
 		},
 		{
-			testCase: "successful range test",
+			testCase:       "successful range test",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -343,7 +339,7 @@ func TestFunctionSuccessfulRangeTest(t *testing.T) {
 `,
 		},
 		{
-			testCase: "missing t.Parallel in range subtest",
+			testCase:       "missing t.Parallel in range subtest",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -382,7 +378,7 @@ func TestFunctionMissingParallelRangeNotUsingRangeValueInTRun(t *testing.T) {
 `,
 		},
 		{
-			testCase: "missing t.Parallel in range subtest with does not have test function in range statement",
+			testCase:       "missing t.Parallel in range subtest with does not have test function in range statement",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -434,7 +430,7 @@ func TestFunctionRangeMissingCallToParallel(t *testing.T) {
 `,
 		},
 		{
-			testCase: "missing t.Parallel in main test function has t.Setenv",
+			testCase:       "missing t.Parallel in main test function has t.Setenv",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -456,7 +452,7 @@ func TestMainFunctionMissingParallelHasSetenv(t *testing.T) {
 `,
 		},
 		{
-			testCase: "missing t.Parallel in sub test function has t.Setenv",
+			testCase:       "missing t.Parallel in sub test function has t.Setenv",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -483,7 +479,7 @@ func TestSubFunctionMissingParallelHasSetenv(t *testing.T) {
 `,
 		},
 		{
-			testCase: "missing t.Parallel in sub test function Main Test has t.Setenv",
+			testCase:       "missing t.Parallel in sub test function Main Test has t.Setenv",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -510,7 +506,7 @@ func TestSubFunctionMissingParallelSubTestHasSetenv(t *testing.T) {
 `,
 		},
 		{
-			testCase: "main & sub test function has t.Setenv",
+			testCase:       "main & sub test function has t.Setenv",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -538,7 +534,7 @@ func TestMainAndSubFunctionHasSetenv(t *testing.T) {
 `,
 		},
 		{
-			testCase: "main test function has t.Setenv with range statement",
+			testCase:       "main test function has t.Setenv with range statement",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -580,7 +576,7 @@ func TestFunctionMainHasSetenvWithRangeTest(t *testing.T) {
 `,
 		},
 		{
-			testCase: "sub test function has t.Setenv with range statement",
+			testCase:       "sub test function has t.Setenv with range statement",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -617,7 +613,7 @@ func TestFunctionSubHasSetenvWithRangeTest(t *testing.T) {
 `,
 		},
 		{
-			testCase: "main & sub test function has t.Setenv with range statement",
+			testCase:       "main & sub test function has t.Setenv with range statement",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -657,7 +653,7 @@ func TestFunctionMainAndSubHasSetenvWithRangeTest(t *testing.T) {
 `,
 		},
 		{
-			testCase: "ignore all lint to file",
+			testCase:       "ignore all lint to file",
 			needFixLoopVar: true,
 			src: `//nolint
 package t
@@ -677,7 +673,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 }`,
 		},
 		{
-			testCase: "ignore paralleltest lint to file",
+			testCase:       "ignore paralleltest lint to file",
 			needFixLoopVar: true,
 			src: `//nolint paralleltest
 package t
@@ -697,7 +693,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 }`,
 		},
 		{
-			testCase: "ignore tparallel lint to file",
+			testCase:       "ignore tparallel lint to file",
 			needFixLoopVar: true,
 			src: `//nolint tparallel
 package t
@@ -717,7 +713,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 }`,
 		},
 		{
-			testCase: "ignore tparallel and paralleltest lint to file",
+			testCase:       "ignore tparallel and paralleltest lint to file",
 			needFixLoopVar: true,
 			src: `//nolint tparallel,paralleltest
 package t
@@ -737,7 +733,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 }`,
 		},
 		{
-			testCase: "ignore paralleltest lint to file",
+			testCase:       "ignore paralleltest lint to file",
 			needFixLoopVar: true,
 			src: `//nolint:paralleltest
 package t
@@ -757,7 +753,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 }`,
 		},
 		{
-			testCase: "ignore tparallel lint to file",
+			testCase:       "ignore tparallel lint to file",
 			needFixLoopVar: true,
 			src: `//nolint:tparallel
 package t
@@ -777,7 +773,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 }`,
 		},
 		{
-			testCase: "ignore tparallel and paralleltest lint to file",
+			testCase:       "ignore tparallel and paralleltest lint to file",
 			needFixLoopVar: true,
 			src: `//nolint:tparallel,paralleltest
 package t
@@ -797,7 +793,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 }`,
 		},
 		{
-			testCase: "ignore tparallel and paralleltest lint to main test",
+			testCase:       "ignore tparallel and paralleltest lint to main test",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -818,7 +814,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 `,
 		},
 		{
-			testCase: "ignore tparallel and paralleltest lint to main test once",
+			testCase:       "ignore tparallel and paralleltest lint to main test once",
 			needFixLoopVar: true,
 			src: `package t
 
@@ -848,7 +844,7 @@ func TestFunctionMissingParallelInMain(t *testing.T) {
 `,
 		},
 		{
-			testCase: "missing t.Parallel in range subtest with needFixLoopVar is false",
+			testCase:       "missing t.Parallel in range subtest with needFixLoopVar is false",
 			needFixLoopVar: false,
 			src: `package t
 
@@ -886,7 +882,7 @@ func TestFunctionMissingParallelRangeNotUsingRangeValueInTRun(t *testing.T) {
 `,
 		},
 		{
-			testCase: "missing t.Parallel in range subtest with does not have test function in range statement with needFixLoopVar is false",
+			testCase:       "missing t.Parallel in range subtest with does not have test function in range statement with needFixLoopVar is false",
 			needFixLoopVar: false,
 			src: `package t
 
