@@ -1,10 +1,10 @@
-name: "tparagen"
-on: 
+name: 'tparagen'
+on:
   pull_request:
     types:
-    - opened
-    - synchronize
-    - reopened
+      - opened
+      - synchronize
+      - reopened
 jobs:
   setup:
     runs-on: ubuntu-latest
