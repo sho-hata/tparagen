@@ -1,10 +1,10 @@
-name: "tparagen"
-on: 
+name: 'tparagen'
+on:
   pull_request:
     types:
-    - opened
-    - synchronize
-    - reopened
+      - opened
+      - synchronize
+      - reopened
 jobs:
   setup:
     runs-on: ubuntu-latest
@@ -12,7 +12,7 @@ jobs:
       - name: set up
         uses: actions/setup-go@v3
         with:
-          go-version: ^1.21
+          go-version: ^1.22
         id: go
       - name: check out
         uses: actions/checkout@v3
