@@ -1,6 +1,6 @@
 module github.com/sho-hata/tparagen
 
-go 1.22.0
+go 1.22.4
 
 require (
 	github.com/alecthomas/kingpin/v2 v2.3.2
