@@ -935,7 +935,6 @@ func TestFunctionRangeMissingCallToParallel(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.testCase, func(t *testing.T) {
 			t.Parallel()
 
