@@ -402,10 +402,6 @@ func buildLoopVarReAssignmentStmt(pos token.Pos, varName string) *ast.AssignStmt
 			&ast.Ident{
 				NamePos: pos,
 				Name:    varName,
-				Obj: &ast.Object{
-					Name: varName,
-					Type: testMethodPackageType,
-				},
 			},
 		},
 		TokPos: pos,
@@ -414,10 +410,6 @@ func buildLoopVarReAssignmentStmt(pos token.Pos, varName string) *ast.AssignStmt
 			&ast.Ident{
 				NamePos: pos,
 				Name:    varName,
-				Obj: &ast.Object{
-					Name: varName,
-					Type: testMethodPackageType,
-				},
 			},
 		},
 	}
