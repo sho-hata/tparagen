@@ -128,7 +128,9 @@ func (t *tparagen) run() error {
 
 		if err := os.Rename(tmpPath, origPath); err != nil {
 			// TODO: logging
-			t.errStream.Write([]byte(fmt.Sprintf("failed to rename %s to %s. %v\n", tmpPath, origPath, err)))
+			if _, err := t.errStream.Write([]byte(fmt.Sprintf("failed to rename %s to %s. %v\n", tmpPath, origPath, err))); err != nil {
+				return false
+			}
 		}
 
 		return true
