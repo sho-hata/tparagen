@@ -28,7 +28,6 @@ func Run(outStream, errStream io.Writer, ignoreDirectories []string, minGoVersio
 
 	t := &tparagen{
 		in:         defaultTargetDir,
-		dest:       "",
 		outStream:  outStream,
 		errStream:  errStream,
 		ignoreDirs: ignoreDirs,
@@ -42,7 +41,7 @@ func Run(outStream, errStream io.Writer, ignoreDirectories []string, minGoVersio
 }
 
 type tparagen struct {
-	in, dest             string
+	in                   string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
 	needFixLoopVar       bool
