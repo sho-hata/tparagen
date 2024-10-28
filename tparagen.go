@@ -81,11 +81,6 @@ func (t *tparagen) run() error {
 		}
 
 		if !bytes.Equal(b, got) {
-			if len(t.dest) != 0 && t.in != t.dest {
-				if err := t.writeOtherPath(t.in, t.dest, path, got); err != nil {
-					return fmt.Errorf("error occurred in triteOtherPath(). %w", err)
-				}
-			}
 			if _, err := f.WriteAt(got, 0); err != nil {
 				return fmt.Errorf("error occurred in writeAt(). %w", err)
 			}
@@ -93,39 +88,6 @@ func (t *tparagen) run() error {
 
 		return nil
 	})
-}
-
-func (t *tparagen) writeOtherPath(in, dist, path string, got []byte) error {
-	p, err := filepath.Rel(in, path)
-	if err != nil {
-		return err
-	}
-
-	distabs, err := filepath.Abs(dist)
-	if err != nil {
-		return err
-	}
-
-	dp := filepath.Join(distabs, p)
-	dpd := filepath.Dir(dp)
-
-	if _, err := os.Stat(dpd); os.IsNotExist(err) {
-		if err := os.Mkdir(dpd, 0777); err != nil {
-			return fmt.Errorf("create dir failed at %q: %w", dpd, err)
-		}
-	}
-
-	f, err := os.OpenFile(dp, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-
-	if _, err = f.Write(got); err != nil {
-		return fmt.Errorf("write file failed at %q: %w", dp, err)
-	}
-
-	return nil
 }
 
 func (t *tparagen) skipDir(p string) bool {
