@@ -48,20 +48,12 @@ type tparagen struct {
 }
 
 func (t *tparagen) run() error {
-	return walker.Walk(t.in, func(path string, info fs.FileInfo) error {
+	err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
 		if info.IsDir() && t.skipDir(path) {
 			return filepath.SkipDir
 		}
 
-		if info.IsDir() {
-			return nil
-		}
-
-		if filepath.Ext(path) != ".go" {
-			return nil
-		}
-
-		if !strings.HasSuffix(filepath.Base(path), "_test.go") {
+		if info.IsDir() || filepath.Ext(path) != ".go" || !strings.HasSuffix(filepath.Base(path), "_test.go") {
 			return nil
 		}
 
@@ -88,6 +80,8 @@ func (t *tparagen) run() error {
 
 		return nil
 	})
+
+	return err
 }
 
 func (t *tparagen) skipDir(p string) bool {
