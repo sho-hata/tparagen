@@ -81,11 +81,6 @@ func (t *tparagen) run() error {
 		}
 
 		if !bytes.Equal(b, got) {
-			if len(t.dest) != 0 && t.in != t.dest {
-				if err := t.writeOtherPath(t.in, t.dest, path, got); err != nil {
-					return fmt.Errorf("error occurred in triteOtherPath(). %w", err)
-				}
-			}
 			if _, err := f.WriteAt(got, 0); err != nil {
 				return fmt.Errorf("error occurred in writeAt(). %w", err)
 			}
