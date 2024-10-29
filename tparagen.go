@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/saracen/walker"
 )
@@ -27,7 +28,6 @@ func Run(outStream, errStream io.Writer, ignoreDirectories []string, minGoVersio
 
 	t := &tparagen{
 		in:         defaultTargetDir,
-		dest:       "",
 		outStream:  outStream,
 		errStream:  errStream,
 		ignoreDirs: ignoreDirs,
@@ -41,27 +41,27 @@ func Run(outStream, errStream io.Writer, ignoreDirectories []string, minGoVersio
 }
 
 type tparagen struct {
-	in, dest             string
+	in                   string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
 	needFixLoopVar       bool
 }
 
+// run() traverses from the root node, and when it finds the target test file, it will process the assignment of a concurrency marker.
+// The contents of each processed file are written to a temporary file.
+// After all scans are complete, rewrite the original file with the contents of each temporary file.
 func (t *tparagen) run() error {
-	return walker.Walk(t.in, func(path string, info fs.FileInfo) error {
+	// Information of files to be modified
+	// key: original file path, value: temporary file path
+	// walker.Walk() may execute concurrently, so sync.Map is used.
+	var tempFiles sync.Map
+
+	err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
 		if info.IsDir() && t.skipDir(path) {
 			return filepath.SkipDir
 		}
 
-		if info.IsDir() {
-			return nil
-		}
-
-		if filepath.Ext(path) != ".go" {
-			return nil
-		}
-
-		if !strings.HasSuffix(filepath.Base(path), "_test.go") {
+		if info.IsDir() || filepath.Ext(path) != ".go" || !strings.HasSuffix(filepath.Base(path), "_test.go") {
 			return nil
 		}
 
@@ -70,12 +70,21 @@ func (t *tparagen) run() error {
 			return fmt.Errorf("cannot open %s. %w", path, err)
 		}
 		defer f.Close()
+
+		tmpf, err := os.CreateTemp("", "temp_")
+		if err != nil {
+			return fmt.Errorf("failed to create temp file for %s. %w", path, err)
+		}
+
+		defer tmpf.Close()
+		tempFiles.Store(path, tmpf.Name())
+
 		b, err := io.ReadAll(f)
 		if err != nil {
 			return fmt.Errorf("cannot read %s. %w", path, err)
 		}
 
-		got, err := Process(path, b, t.needFixLoopVar)
+		got, err := GenerateTParallel(path, b, t.needFixLoopVar)
 		if err != nil {
 			return fmt.Errorf("error occurred in Process(). %w", err)
 		}
@@ -88,37 +97,44 @@ func (t *tparagen) run() error {
 
 		return nil
 	})
-}
-
-func (t *tparagen) writeOtherPath(in, dist, path string, got []byte) error {
-	p, err := filepath.Rel(in, path)
+	// If an error occurs, remove all temporary files
 	if err != nil {
+		tempFiles.Range(func(_, p any) bool {
+			path, ok := p.(string)
+			if !ok {
+				return false
+			}
+
+			// Remove temporary files
+			os.Remove(path)
+
+			return true
+		})
+
 		return err
 	}
 
-	distabs, err := filepath.Abs(dist)
-	if err != nil {
-		return err
-	}
-
-	dp := filepath.Join(distabs, p)
-	dpd := filepath.Dir(dp)
-
-	if _, err := os.Stat(dpd); os.IsNotExist(err) {
-		if err := os.Mkdir(dpd, 0777); err != nil {
-			return fmt.Errorf("create dir failed at %q: %w", dpd, err)
+	// Replace the original file with the temporary file if all writes are successful
+	tempFiles.Range(func(key, value any) bool {
+		origPath, ok := key.(string)
+		if !ok {
+			return false
 		}
-	}
 
-	f, err := os.OpenFile(dp, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
+		tmpPath, ok := value.(string)
+		if !ok {
+			return false
+		}
 
-	if _, err = f.Write(got); err != nil {
-		return fmt.Errorf("write file failed at %q: %w", dp, err)
-	}
+		if err := os.Rename(tmpPath, origPath); err != nil {
+			// TODO: logging
+			if _, err := t.errStream.Write([]byte(fmt.Sprintf("failed to rename %s to %s. %v\n", tmpPath, origPath, err))); err != nil {
+				return false
+			}
+		}
+
+		return true
+	})
 
 	return nil
 }
