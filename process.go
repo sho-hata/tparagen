@@ -17,7 +17,7 @@ const (
 	testPrefix            = "Test"
 )
 
-func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte, error) {
+func Process(filename string, src []byte, needFixLoopVar bool) ([]byte, error) {
 	fs := token.NewFileSet()
 
 	f, err := parser.ParseFile(fs, filename, src, parser.ParseComments)
