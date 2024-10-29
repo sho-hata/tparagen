@@ -56,7 +56,22 @@ func (t *tparagen) run() error {
 	// walker.Walk() may execute concurrently, so sync.Map is used.
 	var tempFiles sync.Map
 
-	err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
+	// remove all temporary files
+	defer func() {
+		tempFiles.Range(func(_, p any) bool {
+			path, ok := p.(string)
+			if !ok {
+				return false
+			}
+
+			// Remove temporary files
+			os.Remove(path)
+
+			return true
+		})
+	}()
+
+	if err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
 		if info.IsDir() && t.skipDir(path) {
 			return filepath.SkipDir
 		}
@@ -96,22 +111,8 @@ func (t *tparagen) run() error {
 		}
 
 		return nil
-	})
-	// If an error occurs, remove all temporary files
-	if err != nil {
-		tempFiles.Range(func(_, p any) bool {
-			path, ok := p.(string)
-			if !ok {
-				return false
-			}
-
-			// Remove temporary files
-			os.Remove(path)
-
-			return true
-		})
-
-		return err
+	}); err != nil {
+		return fmt.Errorf("error occurred in walker.Walk(). %w", err)
 	}
 
 	// Replace the original file with the temporary file if all writes are successful
@@ -132,18 +133,6 @@ func (t *tparagen) run() error {
 				return false
 			}
 		}
-
-		return true
-	})
-
-	tempFiles.Range(func(_, p any) bool {
-		path, ok := p.(string)
-		if !ok {
-			return false
-		}
-
-		// Remove temporary files
-		os.Remove(path)
 
 		return true
 	})
