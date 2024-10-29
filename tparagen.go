@@ -77,7 +77,6 @@ func (t *tparagen) run() error {
 		}
 
 		defer tmpf.Close()
-		tempFiles.Store(path, tmpf.Name())
 
 		b, err := io.ReadAll(f)
 		if err != nil {
@@ -90,9 +89,10 @@ func (t *tparagen) run() error {
 		}
 
 		if !bytes.Equal(b, got) {
-			if _, err := f.WriteAt(got, 0); err != nil {
+			if _, err := tmpf.WriteAt(got, 0); err != nil {
 				return fmt.Errorf("error occurred in writeAt(). %w", err)
 			}
+			tempFiles.Store(path, tmpf.Name())
 		}
 
 		return nil
@@ -132,6 +132,18 @@ func (t *tparagen) run() error {
 				return false
 			}
 		}
+
+		return true
+	})
+
+	tempFiles.Range(func(_, p any) bool {
+		path, ok := p.(string)
+		if !ok {
+			return false
+		}
+
+		// Remove temporary files
+		os.Remove(path)
 
 		return true
 	})
