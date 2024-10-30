@@ -22,7 +22,7 @@ func main() {
 	kingpin.HelpFlag.Short('h')
 
 	if err := tparagen.Run(os.Stdout, os.Stderr, strings.Split(*ignoreDirectories, ","), *minGoVersion); err != nil {
-		os.Stderr.WriteString(err.Error())
+		fmt.Println(err.Error())
 		os.Exit(1)
 	}
 

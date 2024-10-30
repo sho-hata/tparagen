@@ -938,7 +938,7 @@ func TestFunctionRangeMissingCallToParallel(t *testing.T) {
 		t.Run(tt.testCase, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := GenerateTParallel("./testdata/t/t_test.go", []byte(tt.src), tt.needFixLoopVar)
+			got, err := Process("./testdata/t/t_test.go", []byte(tt.src), tt.needFixLoopVar)
 			if err != nil {
 				t.Fatal(err.Error())
 			}

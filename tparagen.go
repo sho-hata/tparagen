@@ -28,6 +28,7 @@ func Run(outStream, errStream io.Writer, ignoreDirectories []string, minGoVersio
 
 	t := &tparagen{
 		in:         defaultTargetDir,
+		dest:       "",
 		outStream:  outStream,
 		errStream:  errStream,
 		ignoreDirs: ignoreDirs,
@@ -41,15 +42,12 @@ func Run(outStream, errStream io.Writer, ignoreDirectories []string, minGoVersio
 }
 
 type tparagen struct {
-	in                   string
+	in, dest             string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
 	needFixLoopVar       bool
 }
 
-// run() traverses from the root node, and when it finds the target test file, it will process the assignment of a concurrency marker.
-// The contents of each processed file are written to a temporary file.
-// After all scans are complete, rewrite the original file with the contents of each temporary file.
 func (t *tparagen) run() error {
 	// Information of files to be modified
 	// key: original file path, value: temporary file path
@@ -76,7 +74,15 @@ func (t *tparagen) run() error {
 			return filepath.SkipDir
 		}
 
-		if info.IsDir() || filepath.Ext(path) != ".go" || !strings.HasSuffix(filepath.Base(path), "_test.go") {
+		if info.IsDir() {
+			return nil
+		}
+
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+
+		if !strings.HasSuffix(filepath.Base(path), "_test.go") {
 			return nil
 		}
 
@@ -98,7 +104,7 @@ func (t *tparagen) run() error {
 			return fmt.Errorf("cannot read %s. %w", path, err)
 		}
 
-		got, err := GenerateTParallel(path, b, t.needFixLoopVar)
+		got, err := Process(path, b, t.needFixLoopVar)
 		if err != nil {
 			return fmt.Errorf("error occurred in Process(). %w", err)
 		}
