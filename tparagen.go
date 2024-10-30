@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/saracen/walker"
 )
@@ -48,7 +49,27 @@ type tparagen struct {
 }
 
 func (t *tparagen) run() error {
-	return walker.Walk(t.in, func(path string, info fs.FileInfo) error {
+	// Information of files to be modified
+	// key: original file path, value: temporary file path
+	// walker.Walk() may execute concurrently, so sync.Map is used.
+	var tempFiles sync.Map
+
+	// remove all temporary files
+	defer func() {
+		tempFiles.Range(func(_, p any) bool {
+			path, ok := p.(string)
+			if !ok {
+				return false
+			}
+
+			// Remove temporary files
+			os.Remove(path)
+
+			return true
+		})
+	}()
+
+	if err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
 		if info.IsDir() && t.skipDir(path) {
 			return filepath.SkipDir
 		}
@@ -70,6 +91,14 @@ func (t *tparagen) run() error {
 			return fmt.Errorf("cannot open %s. %w", path, err)
 		}
 		defer f.Close()
+
+		tmpf, err := os.CreateTemp("", "temp_")
+		if err != nil {
+			return fmt.Errorf("failed to create temp file for %s. %w", path, err)
+		}
+
+		defer tmpf.Close()
+
 		b, err := io.ReadAll(f)
 		if err != nil {
 			return fmt.Errorf("cannot read %s. %w", path, err)
@@ -81,13 +110,40 @@ func (t *tparagen) run() error {
 		}
 
 		if !bytes.Equal(b, got) {
-			if _, err := f.WriteAt(got, 0); err != nil {
+			if _, err := tmpf.WriteAt(got, 0); err != nil {
 				return fmt.Errorf("error occurred in writeAt(). %w", err)
 			}
+			tempFiles.Store(path, tmpf.Name())
 		}
 
 		return nil
+	}); err != nil {
+		return fmt.Errorf("error occurred in walker.Walk(). %w", err)
+	}
+
+	// Replace the original file with the temporary file if all writes are successful
+	tempFiles.Range(func(key, value any) bool {
+		origPath, ok := key.(string)
+		if !ok {
+			return false
+		}
+
+		tmpPath, ok := value.(string)
+		if !ok {
+			return false
+		}
+
+		if err := os.Rename(tmpPath, origPath); err != nil {
+			// TODO: logging
+			if _, err := t.errStream.Write([]byte(fmt.Sprintf("failed to rename %s to %s. %v\n", tmpPath, origPath, err))); err != nil {
+				return false
+			}
+		}
+
+		return true
 	})
+
+	return nil
 }
 
 func (t *tparagen) skipDir(p string) bool {
