@@ -104,7 +104,7 @@ func (t *tparagen) run() error {
 			return fmt.Errorf("cannot read %s. %w", path, err)
 		}
 
-		got, err := Process(path, b, t.needFixLoopVar)
+		got, err := GenerateTParallel(path, b, t.needFixLoopVar)
 		if err != nil {
 			return fmt.Errorf("error occurred in Process(). %w", err)
 		}

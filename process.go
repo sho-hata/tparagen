@@ -17,7 +17,16 @@ const (
 	testPrefix            = "Test"
 )
 
-func Process(filename string, src []byte, needFixLoopVar bool) ([]byte, error) {
+// GenerateTParallel processes a Go source file to ensure that test functions
+// and subtests call t.Parallel() where appropriate. It parses the provided
+// source code, inspects the AST for test functions, and inserts t.Parallel()
+// calls if they are missing. Additionally, it handles cases where test functions
+// use t.Setenv() and ensures proper handling of loop variables in subtests.
+//
+// Returns:
+// - A byte slice containing the modified source code.
+// - An error if any issues occur during parsing or formatting.
+func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte, error) {
 	fs := token.NewFileSet()
 
 	f, err := parser.ParseFile(fs, filename, src, parser.ParseComments)
