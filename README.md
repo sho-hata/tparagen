@@ -1,11 +1,11 @@
 # tparagen
-tparagen insert `testing/T.Parallel()` in a test function in a specific source file or in an entire directory.
+tparagen inserts the `T.Parallel()` method from the testing package into a test function in a specific source file or an entire directory, fast and safely.
 
 
-[![ci](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml)
+[![ci](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml/badge.svg)](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml)
 
 ## Background
-To run go tests in parallel, you need to insert `testing/T.Parallel()` into the main/sub test you want to run in parallel.
+To run go tests in parallel, you need to the `T.Parallel()` method from the testing package into the main/sub test you want to run in parallel.
 
 ```go
 func SampleTest(t *testing.T) {
@@ -16,17 +16,17 @@ func SampleTest(t *testing.T) {
 	}{{name: "foo"}}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(x *testing.T) {
-			x.Parallel()
+			t.Parallel()
 			// do anything...
 		})
 	}
 }
 ```
 
-If there is your application in production already, you must add a `testing/T.Parallel()` into any main/sub test. It is a very time-consuming and tedious task.
+If there is your application in production already, you must add a `T.Parallel()` into any main/sub test. It is a very time-consuming and tedious task.
 
 ## Description
-tparagen is cli tool for insert `testing/T.Parallel()` into all main/sub test in specified directory.
+tparagen is cli tool for insert the `T.Parallel()` method from the testing package into all main/sub test in specified directory.
 
 Before code is below,
 
@@ -44,7 +44,7 @@ func SampleTest(t *testing.T) {
 		name string
 	}{{name: "foo"}}
 	for _, tc := range testCases {
-		t.Run(tc.name, func(x *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			fmt.Println(tc.name)
 		})
 	}
@@ -52,8 +52,6 @@ func SampleTest(t *testing.T) {
 ```
 
 After execute `tparagen`, modified code is below.
-
-### go version >= 1.22
 
 ```go
 package test
@@ -78,7 +76,7 @@ func SampleTest(t *testing.T) {
 }
 ```
 
-### go version < 1.21
+In Go versions earlier than 1.21, code to reassign the loop variable is inserted.(see: https://go.dev/blog/loopvar-preview)
 
 ```go
 package test
