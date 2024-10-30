@@ -64,14 +64,14 @@ import (
 )
 
 func SampleTest(t *testing.T) {
-	t.Parallel()
+	t.Parallel() // <- inserted
 
 	testCases := []struct {
 		name string
 	}{{name: "foo"}}
 	for _, tc := range testCases {
-		t.Run(tc.name, func(x *testing.T) {
-			x.Parallel()
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel() // <- inserted
 			fmt.Println(tc.name)
 		})
 	}
@@ -89,15 +89,15 @@ import (
 )
 
 func SampleTest(t *testing.T) {
-	t.Parallel()
+	t.Parallel() // <- inserted
 
 	testCases := []struct {
 		name string
 	}{{name: "foo"}}
 	for _, tc := range testCases {
-		tc := tc
-		t.Run(tc.name, func(x *testing.T) {
-			x.Parallel()
+		tc := tc // <- inserted
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel() // <- inserted
 			fmt.Println(tc.name)
 		})
 	}
@@ -142,16 +142,13 @@ go install github.com/sho-hata/tparagen/cmd/tparagen@latest
 
 
 ## Contribution
-1. Fork (https://github.com/sho-hata/tparagen/fork)
-2. Create a feature branch
-3. Commit your changes
-4. Rebase your local changes against the master branch
-5. Run test suite with the `go test ./...` command and confirm that it passes
-6. Run `gofmt -s`
-7. Create new Pull Request
+Bug reports and pull requests are welcome on GitHub at https://github.com/sho-hata/tparagen. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the code of conduct.
 
 ## License
 [MIT](https://github.com/sho-hata/tparagen/blob/main/LICENSE)
+
+## Code of Conduct
+Everyone interacting in the Pbt project's codebases, issue trackers, chat rooms and mailing lists is expected to follow the code of conduct.
 
 ## Author
 [sho-hata](https://github.com/sho-hata)
