@@ -24,6 +24,9 @@ func SampleTest(t *testing.T) {
 
 If there is your application in production already, you must add a `T.Parallel()` into any main/sub test. It is a very time-consuming and tedious task.
 
+## Demo
+![demo](/doc/tparagen.gif)
+
 ## Description
 tparagen is cli tool for insert the `T.Parallel()` method from the testing package into all main/sub test in specified directory.
 
@@ -100,9 +103,6 @@ func SampleTest(t *testing.T) {
 	}
 }
 ```
-
-## Demo
-![demo](/doc/tparagen.gif)
 
 
 ### The following cases are supported
