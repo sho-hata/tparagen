@@ -1,11 +1,10 @@
 # tparagen
-tparagen inserts the `T.Parallel()` method from the testing package into a test function in a specific source file or an entire directory, fast and safely.
-
+tparagen inserts the `T.Parallel()` method from the testing package into a test function in a specific source file or an entire directory.
 
 [![ci](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml/badge.svg)](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml)
 
 ## Background
-To run go tests in parallel, you need to the `T.Parallel()` method from the testing package into the main/sub test you want to run in parallel.
+To run go tests in concurrency, you need to the `T.Parallel()` method from the testing package into the main/sub test you want to run in concurrency.
 
 ```go
 func SampleTest(t *testing.T) {
@@ -15,7 +14,7 @@ func SampleTest(t *testing.T) {
 		name string
 	}{{name: "foo"}}
 	for _, tc := range testCases {
-		t.Run(tc.name, func(x *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			// do anything...
 		})
@@ -146,7 +145,7 @@ Bug reports and pull requests are welcome on GitHub at https://github.com/sho-ha
 [MIT](https://github.com/sho-hata/tparagen/blob/main/LICENSE)
 
 ## Code of Conduct
-Everyone interacting in the Pbt project's codebases, issue trackers, chat rooms and mailing lists is expected to follow the code of conduct.
+Everyone interacting in the tparagen project's codebases, issue trackers, chat rooms and mailing lists is expected to follow the code of conduct.
 
 ## Author
 [sho-hata](https://github.com/sho-hata)
