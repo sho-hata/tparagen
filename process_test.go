@@ -154,6 +154,42 @@ func TestFunctionMissingParallelAllTests(t *testing.T) {
 `,
 		},
 		{
+			testCase:       "test function success all tests",
+			needFixLoopVar: true,
+			src: `package t
+
+import "testing"
+
+func TestFunctionSuccessAllTests(t *testing.T) {
+	t.Parallel()
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+	t.Run("2", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("2")
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionSuccessAllTests(t *testing.T) {
+	t.Parallel()
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+	t.Run("2", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("2")
+	})
+}
+`,
+		},
+		{
 			testCase:       "t",
 			needFixLoopVar: true,
 			src: `package t

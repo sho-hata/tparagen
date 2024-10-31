@@ -39,7 +39,7 @@ func TestFunctionMissingParallelAllTests(t *testing.T) {
 
 func TestFunctionSuccessAllTests(t *testing.T) {
 	t.Parallel()
-	t.Run("1", func(x *testing.T) {
+	t.Run("1", func(t *testing.T) {
 		t.Parallel()
 		fmt.Println("1")
 	})
