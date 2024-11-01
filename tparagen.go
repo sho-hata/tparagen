@@ -2,6 +2,7 @@ package tparagen
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -20,7 +21,7 @@ const (
 )
 
 // Run is entry point.
-func Run(outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion float64) error {
+func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion float64) error {
 	ignoreDirs := []string{defaultIgnoreDir}
 	if len(ignoreDirs) != 0 {
 		ignoreDirs = append(ignoreDirs, ignoreDirectories...)
@@ -38,7 +39,7 @@ func Run(outStream, errStream io.Writer, ignoreDirectories []string, minGoVersio
 		t.needFixLoopVar = true
 	}
 
-	return t.run()
+	return t.run(ctx)
 }
 
 type tparagen struct {
@@ -48,7 +49,7 @@ type tparagen struct {
 	needFixLoopVar       bool
 }
 
-func (t *tparagen) run() error {
+func (t *tparagen) run(ctx context.Context) error {
 	// Information of files to be modified
 	// key: original file path, value: temporary file path
 	// walker.Walk() may execute concurrently, so sync.Map is used.
@@ -69,7 +70,7 @@ func (t *tparagen) run() error {
 		})
 	}()
 
-	if err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
+	if err := walker.WalkWithContext(ctx, t.in, func(path string, info fs.FileInfo) error {
 		if info.IsDir() && t.skipDir(path) {
 			return filepath.SkipDir
 		}
