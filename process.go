@@ -132,7 +132,7 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 							funcArg := n.Args[1]
 							// insert parallel helper method
 							if fun, ok := funcArg.(*ast.FuncLit); ok {
-								tpStmt := buildTParallelStmt(fun.Body.Lbrace)
+								tpStmt := buildTParallelStmt(fun.Body.Lbrace, innerTestVar)
 								fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
 							}
 						}
@@ -189,7 +189,7 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 
 		// Check if the main test calls Parallel().
 		if !testHasParallel && !testHasSetenv {
-			tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace)
+			tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace, testVar)
 			funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
 		}
 
@@ -216,7 +216,8 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 								funcArg := c.Args[1]
 								// insert parallel helper method
 								if fun, ok := funcArg.(*ast.FuncLit); ok {
-									tpStmt := buildTParallelStmt(fun.Body.Lbrace)
+									innerTestVar := getRunCallbackParameterName(c)
+									tpStmt := buildTParallelStmt(fun.Body.Lbrace, innerTestVar)
 									fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
 									isInsertedTparallel = true
 								}
@@ -385,14 +386,14 @@ func methodSetEnvIsCalledInMethodRun(node ast.Node, testVar string) bool {
 	return methodSetenvCalled
 }
 
-// build `t.Parallel()` statement to pos location specified in the argument.
-func buildTParallelStmt(pos token.Pos) *ast.ExprStmt {
+// build `<testVar>.Parallel()` statement to pos location specified in the argument.
+func buildTParallelStmt(pos token.Pos, testVar string) *ast.ExprStmt {
 	return &ast.ExprStmt{
 		X: &ast.CallExpr{
 			Fun: &ast.SelectorExpr{
 				X: &ast.Ident{
 					NamePos: pos,
-					Name:    "t",
+					Name:    testVar,
 				},
 				Sel: &ast.Ident{
 					NamePos: pos,
