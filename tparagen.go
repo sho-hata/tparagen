@@ -2,6 +2,8 @@ package tparagen
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -20,7 +22,7 @@ const (
 )
 
 // Run is entry point.
-func Run(outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion float64) error {
+func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion float64) error {
 	ignoreDirs := []string{defaultIgnoreDir}
 	if len(ignoreDirs) != 0 {
 		ignoreDirs = append(ignoreDirs, ignoreDirectories...)
@@ -38,7 +40,7 @@ func Run(outStream, errStream io.Writer, ignoreDirectories []string, minGoVersio
 		t.needFixLoopVar = true
 	}
 
-	return t.run()
+	return t.run(ctx)
 }
 
 type tparagen struct {
@@ -48,7 +50,7 @@ type tparagen struct {
 	needFixLoopVar       bool
 }
 
-func (t *tparagen) run() error {
+func (t *tparagen) run(ctx context.Context) error {
 	// Information of files to be modified
 	// key: original file path, value: temporary file path
 	// walker.Walk() may execute concurrently, so sync.Map is used.
@@ -70,6 +72,12 @@ func (t *tparagen) run() error {
 	}()
 
 	if err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
+		// Abort the scan early on interruption (SIGINT/SIGTERM). Returning here
+		// lets the deferred cleanup remove any temporary files created so far.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		if info.IsDir() && t.skipDir(path) {
 			return filepath.SkipDir
 		}
@@ -118,10 +126,23 @@ func (t *tparagen) run() error {
 
 		return nil
 	}); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("interrupted before applying changes: %w", err)
+		}
+
 		return fmt.Errorf("error occurred in walker.Walk(). %w", err)
 	}
 
-	// Replace the original file with the temporary file if all writes are successful
+	// Do not begin the destructive rename phase if we were interrupted during
+	// the scan. The deferred cleanup removes the temporary files, leaving the
+	// original files untouched.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("interrupted before applying changes: %w", err)
+	}
+
+	// Replace the original file with the temporary file if all writes are successful.
+	// This phase runs to completion without checking for cancellation so that the
+	// files are not left in a partially rewritten state.
 	tempFiles.Range(func(key, value any) bool {
 		origPath, ok := key.(string)
 		if !ok {

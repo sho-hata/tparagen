@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/alecthomas/kingpin/v2"
@@ -21,7 +24,12 @@ func main() {
 	kingpin.Parse()
 	kingpin.HelpFlag.Short('h')
 
-	if err := tparagen.Run(os.Stdout, os.Stderr, strings.Split(*ignoreDirectories, ","), *minGoVersion); err != nil {
+	// Cancel the run gracefully on interruption (Ctrl+C) or termination (kill),
+	// so temporary files are cleaned up instead of being left behind.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := tparagen.Run(ctx, os.Stdout, os.Stderr, strings.Split(*ignoreDirectories, ","), *minGoVersion); err != nil {
 		fmt.Println(err.Error())
 		os.Exit(1)
 	}
