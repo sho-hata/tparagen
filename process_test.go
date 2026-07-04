@@ -27,6 +27,32 @@ func NoTestFunction() {}
 `,
 		},
 		{
+			testCase:       "insert Parallel using the actual receiver name when it is not t",
+			needFixLoopVar: true,
+			src: `package t
+
+import "testing"
+
+func TestFunctionMissingParallelReceiverNotT(_t *testing.T) {
+	_t.Run("1", func(inner *testing.T) {
+		fmt.Println("1")
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestFunctionMissingParallelReceiverNotT(_t *testing.T) {
+	_t.Parallel()
+	_t.Run("1", func(inner *testing.T) {
+		inner.Parallel()
+		fmt.Println("1")
+	})
+}
+`,
+		},
+		{
 			testCase:       "looks like a test but is with param",
 			needFixLoopVar: true,
 			src: `package t
@@ -143,7 +169,7 @@ import "testing"
 func TestFunctionMissingParallelAllTests(t *testing.T) {
 	t.Parallel()
 	t.Run("1", func(x *testing.T) {
-		t.Parallel()
+		x.Parallel()
 		fmt.Println("1")
 	})
 	t.Run("2", func(t *testing.T) {
