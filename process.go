@@ -7,7 +7,7 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
-	"go/types"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -38,8 +38,6 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 	if !isTparagenTargetFile(f) {
 		return src, nil
 	}
-
-	typesInfo := &types.Info{Defs: map[*ast.Ident]types.Object{}}
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		funcDecl, ok := n.(*ast.FuncDecl)
@@ -89,10 +87,12 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 		var (
 			rangeStatementOverTestCasesExists,
 			rangeStatementHasParallelMethod,
-			rangeStatementDeniesParallel,
-			loopVarReInitialized bool
+			rangeStatementDeniesParallel bool
 
-			loopVariableUsedInRun *string
+			// Loop variables declared by rangeNode, and the subset that is
+			// referenced from a subtest callback inside it.
+			loopVars          []string
+			loopVarsUsedInRun map[string]bool
 
 			rangeNode ast.Node
 		)
@@ -141,43 +141,32 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 			// Check if the range over testcases is calling t.Parallel
 			case *ast.RangeStmt:
 				rangeNode = s
-
-				var loopVars []types.Object
-				for _, expr := range []ast.Expr{s.Key, s.Value} {
-					if id, ok := expr.(*ast.Ident); ok {
-						loopVars = append(loopVars, typesInfo.ObjectOf(id))
-					}
-				}
+				loopVars = rangeLoopVarNames(s)
+				loopVarsUsedInRun = map[string]bool{}
 
 				ast.Inspect(s, func(n ast.Node) bool {
-					switch n := n.(type) {
-					case *ast.ExprStmt:
-						if !hasRunMethod(n.X, testVar) {
-							return true
-						}
-						// e.X is a call to Run(); find out the name of the subtest's *testing.T parameter.
-						innerTestVar := getRunCallbackParameterName(n.X)
+					stmt, ok := n.(*ast.ExprStmt)
+					if !ok || !hasRunMethod(stmt.X, testVar) {
+						return true
+					}
+					// stmt.X is a call to Run(); find out the name of the subtest's *testing.T parameter.
+					innerTestVar := getRunCallbackParameterName(stmt.X)
 
-						rangeStatementOverTestCasesExists = true
+					rangeStatementOverTestCasesExists = true
 
-						if !rangeStatementHasParallelMethod {
-							rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(n.X, innerTestVar)
-						}
+					if !rangeStatementHasParallelMethod {
+						rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(stmt.X, innerTestVar)
+					}
 
+					if fun := getRunCallback(stmt.X); fun != nil {
 						if !rangeStatementDeniesParallel {
-							if fun := getRunCallback(n.X); fun != nil {
-								rangeStatementDeniesParallel = deniesParallel(fun.Body, tIdents)
-							}
+							rangeStatementDeniesParallel = deniesParallel(fun.Body, tIdents)
 						}
 
-						if loopVariableUsedInRun == nil {
-							if run, ok := n.X.(*ast.CallExpr); ok {
-								loopVariableUsedInRun = loopVarReferencedInRun(run, loopVars, typesInfo)
+						for _, name := range loopVars {
+							if identReferenced(fun.Body, name) {
+								loopVarsUsedInRun[name] = true
 							}
-						}
-					case *ast.AssignStmt:
-						if !loopVarReInitialized {
-							loopVarReInitialized = loopVarReAssigned(n, loopVars, typesInfo)
 						}
 					}
 
@@ -229,14 +218,21 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 							}
 						}
 					}
-					// https://tip.golang.org/doc/go1.22
-					// Loop variables are not re-initialised if the minimum version of Go is less than 1.22
-					if needFixLoopVar && loopVariableUsedInRun != nil && !loopVarReInitialized {
-						// insert loop var reassignment statement
-						if v, ok := r.Value.(*ast.Ident); ok {
-							lv := buildLoopVarReAssignmentStmt(r.Body.Lbrace, v.Name)
-							r.Body.List = append([]ast.Stmt{lv}, r.Body.List...)
+					// Before Go 1.22 every iteration shares the same loop variable
+					// (https://go.dev/doc/go1.22#language), so a parallel subtest
+					// that captures it needs its own copy: `tc := tc`.
+					if needFixLoopVar {
+						copied := loopVarsCopiedInBody(r, loopVars)
+
+						var copies []ast.Stmt
+
+						for _, name := range loopVars {
+							if loopVarsUsedInRun[name] && !copied[name] {
+								copies = append(copies, buildLoopVarReAssignmentStmt(r.Body.Lbrace, name))
+							}
 						}
+
+						r.Body.List = append(copies, r.Body.List...)
 					}
 				}
 
@@ -536,41 +532,67 @@ func buildLoopVarReAssignmentStmt(pos token.Pos, varName string) *ast.AssignStmt
 	}
 }
 
-func loopVarReferencedInRun(call *ast.CallExpr, vars []types.Object, typeInfo *types.Info) (found *string) {
-	if len(call.Args) != 2 {
-		return nil
+// rangeLoopVarNames returns the names of the variables declared by a range
+// statement (key and/or value), skipping the blank identifier.
+func rangeLoopVarNames(r *ast.RangeStmt) []string {
+	var names []string
+
+	for _, expr := range []ast.Expr{r.Key, r.Value} {
+		if id, ok := expr.(*ast.Ident); ok && id.Name != "_" {
+			names = append(names, id.Name)
+		}
 	}
 
-	ast.Inspect(call.Args[1], func(n ast.Node) bool {
-		ident, ok := n.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		for _, o := range vars {
-			if typeInfo.ObjectOf(ident) == o {
-				found = &ident.Name
-			}
+	return names
+}
+
+// identReferenced reports whether an identifier called name occurs anywhere in
+// node. Shadowing is not resolved on purpose: a false positive only leads to a
+// harmless extra `name := name` copy.
+func identReferenced(node ast.Node, name string) bool {
+	var found bool
+
+	ast.Inspect(node, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
 		}
 
-		return true
+		return !found
 	})
 
 	return found
 }
 
-func loopVarReAssigned(assign *ast.AssignStmt, vars []types.Object, typeInfo *types.Info) bool {
-	if len(assign.Rhs) != 1 || len(vars) != 2 {
-		return false
-	}
+// loopVarsCopiedInBody returns the loop variables that the range body already
+// re-declares with the `tc := tc` idiom (or `i, tc := i, tc`) directly at the
+// top level of the body.
+func loopVarsCopiedInBody(r *ast.RangeStmt, loopVars []string) map[string]bool {
+	copied := map[string]bool{}
 
-	// e.g. tt := tt
-	if id, ok := assign.Rhs[0].(*ast.Ident); ok {
-		if typeInfo.ObjectOf(id) == vars[1] {
-			return true
+	for _, stmt := range r.Body.List {
+		assign, ok := stmt.(*ast.AssignStmt)
+		if !ok || assign.Tok != token.DEFINE || len(assign.Lhs) != len(assign.Rhs) {
+			continue
+		}
+
+		for i := range assign.Lhs {
+			lhs, ok := assign.Lhs[i].(*ast.Ident)
+			if !ok {
+				continue
+			}
+
+			rhs, ok := assign.Rhs[i].(*ast.Ident)
+			if !ok || lhs.Name != rhs.Name {
+				continue
+			}
+
+			if slices.Contains(loopVars, lhs.Name) {
+				copied[lhs.Name] = true
+			}
 		}
 	}
 
-	return false
+	return copied
 }
 
 // nolintTargets are the linter names that, when listed in a nolint directive,

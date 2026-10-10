@@ -16,13 +16,17 @@ import (
 )
 
 const (
-	defaultTargetDir     = "./"
-	defaultIgnoreDir     = "testdata"
-	fixingForLoopVersion = 1.22
+	defaultTargetDir = "./"
+	defaultIgnoreDir = "testdata"
 )
 
 // Run is entry point.
-func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion float64) error {
+//
+// minGoVersion is the Go language version the processed tests are written for
+// (e.g. "1.21"). It decides whether loop variables have to be copied before a
+// parallel subtest, which is needed before Go 1.22. When it is empty, the go
+// directive of the nearest go.mod is used.
+func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion string) error {
 	ignoreDirs := []string{defaultIgnoreDir}
 	if len(ignoreDirs) != 0 {
 		ignoreDirs = append(ignoreDirs, ignoreDirectories...)
@@ -36,9 +40,12 @@ func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories 
 		ignoreDirs: ignoreDirs,
 	}
 
-	if minGoVersion < fixingForLoopVersion {
-		t.needFixLoopVar = true
+	needFix, err := t.resolveNeedFixLoopVar(minGoVersion)
+	if err != nil {
+		return err
 	}
+
+	t.needFixLoopVar = needFix
 
 	return t.run(ctx)
 }
