@@ -24,7 +24,7 @@ builds:
       - darwin
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     # this name template makes the OS and Arch compatible with the results of `uname`.
     name_template: >-
       {{ .ProjectName }}_
@@ -36,11 +36,10 @@ archives:
     # use zip for windows archives
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
 
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
+  # Same notes as GitHub's "Generate release notes" button: a "What's Changed"
+  # list of the merged pull requests plus the compare link. The release is
+  # complete as soon as the tag is pushed; no manual release creation needed.
+  use: github-native
