@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -34,7 +35,7 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 		return nil, fmt.Errorf("cannot parse file. %w", err)
 	}
 
-	if !isTparagenTargetFile(f.Comments) {
+	if !isTparagenTargetFile(f) {
 		return src, nil
 	}
 
@@ -206,6 +207,10 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 								// insert parallel helper method
 								if fun, ok := funcArg.(*ast.FuncLit); ok {
 									innerTestVar := getRunCallbackParameterName(c)
+									if innerTestVar == "" {
+										// No usable *testing.T name, e.g. `func(_ *testing.T)`.
+										continue
+									}
 									tpStmt := buildTParallelStmt(fun.Body.Lbrace, innerTestVar)
 									fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
 									isInsertedTparallel = true
@@ -254,11 +259,23 @@ func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
 		return false, ""
 	}
 
-	if funcDecl.Type.Params != nil && len(funcDecl.Type.Params.List) != 1 {
+	// A declaration without a body (e.g. implemented elsewhere) has nothing
+	// to insert into.
+	if funcDecl.Body == nil {
+		return false, ""
+	}
+
+	if funcDecl.Type.Params == nil || len(funcDecl.Type.Params.List) != 1 {
 		return false, ""
 	}
 
 	param := funcDecl.Type.Params.List[0]
+
+	// `func TestX(*testing.T)` has no name to call Parallel() on, and neither
+	// has `func TestX(_ *testing.T)`: `_.Parallel()` does not compile.
+	if len(param.Names) != 1 || param.Names[0].Name == "_" {
+		return false, ""
+	}
 
 	starExp, ok := param.Type.(*ast.StarExpr)
 	if !ok {
@@ -442,6 +459,11 @@ func getRunCallbackParameterName(node ast.Node) string {
 				return ""
 			}
 
+			// `func(_ *testing.T)`: there is no name to call Parallel() on.
+			if firstArg.Names[0].Name == "_" {
+				return ""
+			}
+
 			return firstArg.Names[0].Name
 		}
 	}
@@ -573,26 +595,79 @@ func loopVarsCopiedInBody(r *ast.RangeStmt, loopVars []string) map[string]bool {
 	return copied
 }
 
+// nolintTargets are the linter names that, when listed in a nolint directive,
+// exclude the file or function from tparagen.
+var nolintTargets = map[string]bool{
+	"all":          true,
+	"paralleltest": true,
+	"tparallel":    true,
+}
+
+// hasNolintCommentDirective reports whether the comment group contains a nolint
+// directive that applies to tparagen. Any other comment, including an ordinary
+// doc comment, does not count.
 func hasNolintCommentDirective(cg *ast.CommentGroup) bool {
 	for _, c := range cg.List {
-		if c.Text == "//nolint" || strings.Contains(c.Text, "paralleltest") || strings.Contains(c.Text, "tparallel") {
+		if isNolintDirectiveForTparagen(c.Text) {
 			return true
 		}
 	}
 
-	return true
+	return false
 }
 
-// check file top comment
-// if a file has a nolint comment at the beginning, the file is removed from the target.
-// also, if a specific linter (tparallel, paralleltest) is specified with a nolint comment, it is removed from the target.
-func isTparagenTargetFile(fileComments []*ast.CommentGroup) bool {
-	if len(fileComments) == 0 {
+// isNolintDirectiveForTparagen reports whether a single comment line is a
+// nolint directive that applies to tparagen: a bare `//nolint`, `//nolint:all`,
+// or one naming paralleltest/tparallel such as `//nolint:tparallel,paralleltest`.
+// The legacy space-separated form `//nolint tparallel` and a trailing
+// explanation (`//nolint:tparallel // reason`) are accepted too.
+func isNolintDirectiveForTparagen(text string) bool {
+	const prefix = "//nolint"
+
+	if !strings.HasPrefix(text, prefix) {
+		return false
+	}
+
+	rest := strings.TrimPrefix(text, prefix)
+
+	// Drop a trailing explanation.
+	if i := strings.Index(rest, "//"); i >= 0 {
+		rest = rest[:i]
+	}
+
+	rest = strings.TrimPrefix(strings.TrimSpace(rest), ":")
+
+	linters := strings.FieldsFunc(rest, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
+
+	// A bare //nolint disables every linter.
+	if len(linters) == 0 {
 		return true
 	}
 
-	if fileComments[0].Pos() == 1 {
-		return !hasNolintCommentDirective(fileComments[0])
+	for _, l := range linters {
+		if nolintTargets[l] {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isTparagenTargetFile reports whether the file should be processed at all.
+// A nolint directive placed anywhere before the package clause (on its own,
+// after a build constraint or a license header, or as the package doc comment)
+// excludes the whole file.
+func isTparagenTargetFile(f *ast.File) bool {
+	for _, cg := range f.Comments {
+		if cg.Pos() > f.Package {
+			break
+		}
+
+		if hasNolintCommentDirective(cg) {
+			return false
+		}
 	}
 
 	return true

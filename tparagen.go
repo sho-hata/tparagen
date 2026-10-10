@@ -58,29 +58,17 @@ type tparagen struct {
 }
 
 func (t *tparagen) run(ctx context.Context) error {
-	// Information of files to be modified
-	// key: original file path, value: temporary file path
-	// walker.Walk() may execute concurrently, so sync.Map is used.
-	var tempFiles sync.Map
-
-	// remove all temporary files
-	defer func() {
-		tempFiles.Range(func(_, p any) bool {
-			path, ok := p.(string)
-			if !ok {
-				return false
-			}
-
-			// Remove temporary files
-			os.Remove(path)
-
-			return true
-		})
-	}()
+	// Rewritten contents keyed by file path. The walk itself is read-only:
+	// files are written only after every file has been processed successfully,
+	// so a failure half-way leaves every original untouched. Creating files
+	// inside the directories being walked would also disturb the concurrent
+	// directory listing. walker.Walk() may execute concurrently, so sync.Map
+	// is used.
+	var changes sync.Map
 
 	if err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
-		// Abort the scan early on interruption (SIGINT/SIGTERM). Returning here
-		// lets the deferred cleanup remove any temporary files created so far.
+		// Abort the scan early on interruption (SIGINT/SIGTERM); nothing has
+		// been written at this point.
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -101,34 +89,18 @@ func (t *tparagen) run(ctx context.Context) error {
 			return nil
 		}
 
-		f, err := os.OpenFile(path, os.O_RDWR, 0664)
-		if err != nil {
-			return fmt.Errorf("cannot open %s. %w", path, err)
-		}
-		defer f.Close()
-
-		tmpf, err := os.CreateTemp("", "temp_")
-		if err != nil {
-			return fmt.Errorf("failed to create temp file for %s. %w", path, err)
-		}
-
-		defer tmpf.Close()
-
-		b, err := io.ReadAll(f)
+		src, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("cannot read %s. %w", path, err)
 		}
 
-		got, err := GenerateTParallel(path, b, t.needFixLoopVar)
+		got, err := GenerateTParallel(path, src, t.needFixLoopVar)
 		if err != nil {
 			return fmt.Errorf("error occurred in Process(). %w", err)
 		}
 
-		if !bytes.Equal(b, got) {
-			if _, err := tmpf.WriteAt(got, 0); err != nil {
-				return fmt.Errorf("error occurred in writeAt(). %w", err)
-			}
-			tempFiles.Store(path, tmpf.Name())
+		if !bytes.Equal(src, got) {
+			changes.Store(path, got)
 		}
 
 		return nil
@@ -140,36 +112,120 @@ func (t *tparagen) run(ctx context.Context) error {
 		return fmt.Errorf("error occurred in walker.Walk(). %w", err)
 	}
 
-	// Do not begin the destructive rename phase if we were interrupted during
-	// the scan. The deferred cleanup removes the temporary files, leaving the
-	// original files untouched.
+	// Do not begin the write phase if we were interrupted during the scan.
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("interrupted before applying changes: %w", err)
 	}
 
-	// Replace the original file with the temporary file if all writes are successful.
-	// This phase runs to completion without checking for cancellation so that the
-	// files are not left in a partially rewritten state.
-	tempFiles.Range(func(key, value any) bool {
+	// Write every file now that every rewrite succeeded. This phase runs to
+	// completion without checking for cancellation so that the files are not
+	// left in a partially rewritten state.
+	return applyChanges(&changes)
+}
+
+// writeTempFile writes content to a new temporary file next to path, with the
+// same permission bits as path, and returns its name. Creating it in the same
+// directory keeps the final rename atomic and on the same file system: a
+// temporary file under os.TempDir() cannot be renamed across devices (e.g.
+// a tmpfs /tmp), and os.CreateTemp's fixed 0600 mode would replace the
+// original permissions.
+func writeTempFile(path string, content []byte) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("cannot stat %s. %w", path, err)
+	}
+
+	tmpf, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tparagen-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file for %s. %w", path, err)
+	}
+
+	tmpPath := tmpf.Name()
+
+	fail := func(err error) (string, error) {
+		tmpf.Close()
+		os.Remove(tmpPath)
+
+		return "", err
+	}
+
+	if err := tmpf.Chmod(info.Mode().Perm()); err != nil {
+		return fail(fmt.Errorf("failed to set permissions of temp file for %s. %w", path, err))
+	}
+
+	if _, err := tmpf.Write(content); err != nil {
+		return fail(fmt.Errorf("failed to write temp file for %s. %w", path, err))
+	}
+
+	if err := tmpf.Close(); err != nil {
+		os.Remove(tmpPath)
+
+		return "", fmt.Errorf("failed to close temp file for %s. %w", path, err)
+	}
+
+	return tmpPath, nil
+}
+
+// applyChanges writes every rewritten content (keyed by file path) to a
+// temporary file next to its original and then renames the temporary files
+// over the originals. All temporary files are written before the first rename,
+// so a write failure (read-only directory, disk full, ...) leaves every
+// original untouched. Every rename is attempted even if one fails, and all
+// failures are reported so that the caller exits non-zero instead of silently
+// pretending the files were updated.
+func applyChanges(changes *sync.Map) error {
+	type pendingFile struct {
+		origPath, tmpPath string
+	}
+
+	var (
+		pending  []pendingFile
+		writeErr error
+	)
+
+	changes.Range(func(key, value any) bool {
 		origPath, ok := key.(string)
 		if !ok {
 			return false
 		}
 
-		tmpPath, ok := value.(string)
+		content, ok := value.([]byte)
 		if !ok {
 			return false
 		}
 
-		if err := os.Rename(tmpPath, origPath); err != nil {
-			// TODO: logging
-			if _, err := fmt.Fprintf(t.errStream, "failed to rename %s to %s. %v\n", tmpPath, origPath, err); err != nil {
-				return false
-			}
+		tmpPath, err := writeTempFile(origPath, content)
+		if err != nil {
+			writeErr = err
+
+			return false
 		}
+
+		pending = append(pending, pendingFile{origPath: origPath, tmpPath: tmpPath})
 
 		return true
 	})
+
+	if writeErr != nil {
+		for _, p := range pending {
+			os.Remove(p.tmpPath)
+		}
+
+		return writeErr
+	}
+
+	var errs []error
+
+	for _, p := range pending {
+		if err := os.Rename(p.tmpPath, p.origPath); err != nil {
+			os.Remove(p.tmpPath)
+			errs = append(errs, fmt.Errorf("failed to replace %s. %w", p.origPath, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("some files were not updated. %w", errors.Join(errs...))
+	}
 
 	return nil
 }
