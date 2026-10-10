@@ -41,11 +41,6 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 
 	typesInfo := &types.Info{Defs: map[*ast.Ident]types.Object{}}
 
-	var (
-		testHasSetenv   bool
-		testHasParallel bool
-	)
-
 	ast.Inspect(f, func(n ast.Node) bool {
 		funcDecl, ok := n.(*ast.FuncDecl)
 		if !ok {
@@ -63,22 +58,29 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 			return true
 		}
 
+		// Per-function state. It must start fresh for every test function:
+		// otherwise a Parallel()/Setenv() call found in one function would
+		// suppress the insertion in every function that follows it in the file.
+		var (
+			testHasSetenv   bool
+			testHasParallel bool
+		)
+
 		for _, l := range funcDecl.Body.List {
 			if s, ok := l.(*ast.ExprStmt); ok {
 				ast.Inspect(s, func(n ast.Node) bool {
-					// Check if the Run() within the test function is calling t.Parallel
+					// Do not descend into subtests; their Parallel()/Setenv()
+					// calls belong to the subtest, not to this function.
 					if hasRunMethod(n, testVar) {
 						return false
 					}
 
 					// Check if the test method is calling Parallel()
-					// If Parallel() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod`  is true.
 					if !testHasParallel {
 						testHasParallel = hasParallelMethod(n, testVar)
 					}
 
 					// Check if the test method is calling Setenv()
-					// If Setenv() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod`  is true.
 					if !testHasSetenv {
 						testHasSetenv = hasSetenvMethod(n, testVar)
 					}
