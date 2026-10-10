@@ -217,6 +217,10 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 								// insert parallel helper method
 								if fun, ok := funcArg.(*ast.FuncLit); ok {
 									innerTestVar := getRunCallbackParameterName(c)
+									if innerTestVar == "" {
+										// No usable *testing.T name, e.g. `func(_ *testing.T)`.
+										continue
+									}
 									tpStmt := buildTParallelStmt(fun.Body.Lbrace, innerTestVar)
 									fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
 									isInsertedTparallel = true
@@ -258,11 +262,23 @@ func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
 		return false, ""
 	}
 
-	if funcDecl.Type.Params != nil && len(funcDecl.Type.Params.List) != 1 {
+	// A declaration without a body (e.g. implemented elsewhere) has nothing
+	// to insert into.
+	if funcDecl.Body == nil {
+		return false, ""
+	}
+
+	if funcDecl.Type.Params == nil || len(funcDecl.Type.Params.List) != 1 {
 		return false, ""
 	}
 
 	param := funcDecl.Type.Params.List[0]
+
+	// `func TestX(*testing.T)` has no name to call Parallel() on, and neither
+	// has `func TestX(_ *testing.T)`: `_.Parallel()` does not compile.
+	if len(param.Names) != 1 || param.Names[0].Name == "_" {
+		return false, ""
+	}
 
 	starExp, ok := param.Type.(*ast.StarExpr)
 	if !ok {
@@ -332,6 +348,11 @@ func getRunCallbackParameterName(node ast.Node) string {
 			firstArg := fun.Type.Params.List[0]
 			// We'll assume firstArg.Type is *testing.T.
 			if len(firstArg.Names) < 1 {
+				return ""
+			}
+
+			// `func(_ *testing.T)`: there is no name to call Parallel() on.
+			if firstArg.Names[0].Name == "_" {
 				return ""
 			}
 
