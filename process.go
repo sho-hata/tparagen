@@ -59,18 +59,19 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 		}
 
 		// Per-function state. It must start fresh for every test function:
-		// otherwise a Parallel()/Setenv() call found in one function would
-		// suppress the insertion in every function that follows it in the file.
-		var (
-			testHasSetenv   bool
-			testHasParallel bool
-		)
+		// otherwise a Parallel() call found in one function would suppress
+		// the insertion in every function that follows it in the file.
+		var testHasParallel bool
+
+		// Names of every *testing.T value in scope within this function: the
+		// function's own parameter plus the parameter of every subtest closure.
+		tIdents := testingTIdents(testVar, funcDecl.Body)
 
 		for _, l := range funcDecl.Body.List {
 			if s, ok := l.(*ast.ExprStmt); ok {
 				ast.Inspect(s, func(n ast.Node) bool {
-					// Do not descend into subtests; their Parallel()/Setenv()
-					// calls belong to the subtest, not to this function.
+					// Do not descend into subtests; their Parallel() calls
+					// belong to the subtest, not to this function.
 					if hasRunMethod(n, testVar) {
 						return false
 					}
@@ -78,11 +79,6 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 					// Check if the test method is calling Parallel()
 					if !testHasParallel {
 						testHasParallel = hasParallelMethod(n, testVar)
-					}
-
-					// Check if the test method is calling Setenv()
-					if !testHasSetenv {
-						testHasSetenv = hasSetenvMethod(n, testVar)
 					}
 
 					return true
@@ -93,7 +89,7 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 		var (
 			rangeStatementOverTestCasesExists,
 			rangeStatementHasParallelMethod,
-			rangeStatementHasSetEnvMethod,
+			rangeStatementDeniesParallel,
 			loopVarReInitialized bool
 
 			loopVariableUsedInRun *string
@@ -116,29 +112,27 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 						return true
 					}
 
-					var subTestHasParallel, subTestHasSetEnv bool
+					fun := getRunCallback(n)
+					if fun == nil {
+						return true
+					}
+
+					var subTestHasParallel bool
 
 					ast.Inspect(s, func(p ast.Node) bool {
 						if !subTestHasParallel {
 							subTestHasParallel = hasParallelMethod(p, innerTestVar)
 						}
-						if !subTestHasSetEnv {
-							subTestHasSetEnv = hasSetenvMethod(p, innerTestVar)
-						}
 
 						return true
 					})
 
-					// Check if the sub test calls t.Parallel.
-					if !subTestHasParallel && !subTestHasSetEnv {
-						if n, ok := n.(*ast.CallExpr); ok {
-							funcArg := n.Args[1]
-							// insert parallel helper method
-							if fun, ok := funcArg.(*ast.FuncLit); ok {
-								tpStmt := buildTParallelStmt(fun.Body.Lbrace, innerTestVar)
-								fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
-							}
-						}
+					// Insert Parallel() unless the subtest already calls it, or the
+					// subtest (or a nested subtest) calls t.Setenv/t.Chdir etc.,
+					// which panic when the test or any ancestor is parallel.
+					if !subTestHasParallel && !deniesParallel(fun.Body, tIdents) {
+						tpStmt := buildTParallelStmt(fun.Body.Lbrace, innerTestVar)
+						fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
 					}
 
 					return true
@@ -170,8 +164,10 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 							rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(n.X, innerTestVar)
 						}
 
-						if !rangeStatementHasSetEnvMethod {
-							rangeStatementHasSetEnvMethod = methodSetEnvIsCalledInMethodRun(n.X, innerTestVar)
+						if !rangeStatementDeniesParallel {
+							if fun := getRunCallback(n.X); fun != nil {
+								rangeStatementDeniesParallel = deniesParallel(fun.Body, tIdents)
+							}
 						}
 
 						if loopVariableUsedInRun == nil {
@@ -190,14 +186,16 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 			}
 		}
 
-		// Check if the main test calls Parallel().
-		if !testHasParallel && !testHasSetenv {
+		// Insert Parallel() unless the test already calls it, or the test (or
+		// any of its subtests, at any depth) calls t.Setenv/t.Chdir etc.:
+		// those panic when the test or any of its ancestors is parallel.
+		if !testHasParallel && !deniesParallel(funcDecl.Body, tIdents) {
 			tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace, testVar)
 			funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
 		}
 
 		// Check if the sub tests calls t.Parallel.
-		if rangeNode != nil && rangeStatementOverTestCasesExists && !rangeStatementHasParallelMethod && !rangeStatementHasSetEnvMethod {
+		if rangeNode != nil && rangeStatementOverTestCasesExists && !rangeStatementHasParallelMethod && !rangeStatementDeniesParallel {
 			var isInsertedTparallel bool
 
 			ast.Inspect(rangeNode, func(n ast.Node) bool {
@@ -309,8 +307,119 @@ func hasRunMethod(node ast.Node, testVar string) bool {
 	return exprCallHasMethod(node, testVar, "Run")
 }
 
-func hasSetenvMethod(node ast.Node, testVar string) bool {
-	return exprCallHasMethod(node, testVar, "Setenv")
+// parallelDenyingMethods are the *testing.T methods that panic when the test,
+// or any of its ancestors, has called Parallel() (see checkParallel in the
+// testing package).
+var parallelDenyingMethods = map[string]bool{
+	"Setenv": true, // Go 1.17+
+	"Chdir":  true, // Go 1.24+
+}
+
+// parallelDenyingFuncs are functions taking a *testing.T argument that have
+// the same constraint as parallelDenyingMethods.
+var parallelDenyingFuncs = map[string]bool{
+	"SetGlobalRandom": true, // testing/cryptotest, Go 1.26+
+}
+
+// testingTIdents returns the names of every *testing.T value in scope within
+// body: root (the test function's own parameter) plus the *testing.T parameter
+// of every function literal declared inside body, i.e. subtest callbacks.
+func testingTIdents(root string, body ast.Node) map[string]bool {
+	idents := map[string]bool{root: true}
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		fun, ok := n.(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+
+		for _, field := range fun.Type.Params.List {
+			if !isTestingT(field.Type) {
+				continue
+			}
+
+			for _, name := range field.Names {
+				idents[name.Name] = true
+			}
+		}
+
+		return true
+	})
+
+	return idents
+}
+
+// isTestingT reports whether expr is the type expression *testing.T.
+func isTestingT(expr ast.Expr) bool {
+	star, ok := expr.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+
+	sel, ok := star.X.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+
+	pkg, ok := sel.X.(*ast.Ident)
+
+	return ok && pkg.Name == testMethodPackageType && sel.Sel.Name == testMethodStruct
+}
+
+// deniesParallel reports whether node contains a call that forbids Parallel()
+// on the enclosing test and on all of its ancestors: t.Setenv, t.Chdir, or
+// cryptotest.SetGlobalRandom(t, ...) on any *testing.T named in tIdents.
+// Nested subtests are searched on purpose: a Setenv in a subtest also forbids
+// Parallel() in every enclosing test.
+func deniesParallel(node ast.Node, tIdents map[string]bool) bool {
+	var denies bool
+
+	ast.Inspect(node, func(n ast.Node) bool {
+		if denies {
+			return false
+		}
+
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+
+		if parallelDenyingMethods[sel.Sel.Name] {
+			if recv, ok := sel.X.(*ast.Ident); ok && tIdents[recv.Name] {
+				denies = true
+			}
+		}
+
+		if parallelDenyingFuncs[sel.Sel.Name] {
+			for _, arg := range call.Args {
+				if id, ok := arg.(*ast.Ident); ok && tIdents[id.Name] {
+					denies = true
+				}
+			}
+		}
+
+		return !denies
+	})
+
+	return denies
+}
+
+// In an expression of the form t.Run(x, func(q *testing.T) {...}), return the
+// function literal that is the subtest body, or nil if there is none.
+func getRunCallback(node ast.Node) *ast.FuncLit {
+	call, ok := node.(*ast.CallExpr)
+	if !ok || len(call.Args) < 2 {
+		return nil
+	}
+
+	fun, _ := call.Args[1].(*ast.FuncLit)
+
+	return fun
 }
 
 // In an expression of the form t.Run(x, func(q *testing.T) {...}), return the
@@ -365,28 +474,6 @@ func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
 	}
 
 	return isCalledParallel
-}
-
-func methodSetEnvIsCalledInMethodRun(node ast.Node, testVar string) bool {
-	var methodSetenvCalled bool
-
-	if callExp, ok := node.(*ast.CallExpr); ok {
-		for _, arg := range callExp.Args {
-			if !methodSetenvCalled {
-				ast.Inspect(arg, func(n ast.Node) bool {
-					if !methodSetenvCalled {
-						methodSetenvCalled = hasSetenvMethod(n, testVar)
-
-						return true
-					}
-
-					return false
-				})
-			}
-		}
-	}
-
-	return methodSetenvCalled
 }
 
 // build `<testVar>.Parallel()` statement to pos location specified in the argument.
