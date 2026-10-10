@@ -17,7 +17,10 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          # Build releases with the newest stable toolchain so shipped
+          # binaries carry the latest standard library security fixes.
+          go-version: stable
+          check-latest: true
           cache: true
 
       - uses: goreleaser/goreleaser-action@v7

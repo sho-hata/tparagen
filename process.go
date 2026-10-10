@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"go/types"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -34,16 +35,11 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 		return nil, fmt.Errorf("cannot parse file. %w", err)
 	}
 
-	if !isTparagenTargetFile(f.Comments) {
+	if !isTparagenTargetFile(f) {
 		return src, nil
 	}
 
 	typesInfo := &types.Info{Defs: map[*ast.Ident]types.Object{}}
-
-	var (
-		testHasSetenv   bool
-		testHasParallel bool
-	)
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		funcDecl, ok := n.(*ast.FuncDecl)
@@ -62,24 +58,27 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 			return true
 		}
 
+		// Per-function state. It must start fresh for every test function:
+		// otherwise a Parallel() call found in one function would suppress
+		// the insertion in every function that follows it in the file.
+		var testHasParallel bool
+
+		// Names of every *testing.T value in scope within this function: the
+		// function's own parameter plus the parameter of every subtest closure.
+		tIdents := testingTIdents(testVar, funcDecl.Body)
+
 		for _, l := range funcDecl.Body.List {
 			if s, ok := l.(*ast.ExprStmt); ok {
 				ast.Inspect(s, func(n ast.Node) bool {
-					// Check if the Run() within the test function is calling t.Parallel
+					// Do not descend into subtests; their Parallel() calls
+					// belong to the subtest, not to this function.
 					if hasRunMethod(n, testVar) {
 						return false
 					}
 
 					// Check if the test method is calling Parallel()
-					// If Parallel() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod`  is true.
 					if !testHasParallel {
 						testHasParallel = hasParallelMethod(n, testVar)
-					}
-
-					// Check if the test method is calling Setenv()
-					// If Setenv() is inserted once in a subtest in subsequent processing, `funcHasParallelmethod`  is true.
-					if !testHasSetenv {
-						testHasSetenv = hasSetenvMethod(n, testVar)
 					}
 
 					return true
@@ -90,7 +89,7 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 		var (
 			rangeStatementOverTestCasesExists,
 			rangeStatementHasParallelMethod,
-			rangeStatementHasSetEnvMethod,
+			rangeStatementDeniesParallel,
 			loopVarReInitialized bool
 
 			loopVariableUsedInRun *string
@@ -113,29 +112,27 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 						return true
 					}
 
-					var subTestHasParallel, subTestHasSetEnv bool
+					fun := getRunCallback(n)
+					if fun == nil {
+						return true
+					}
+
+					var subTestHasParallel bool
 
 					ast.Inspect(s, func(p ast.Node) bool {
 						if !subTestHasParallel {
 							subTestHasParallel = hasParallelMethod(p, innerTestVar)
 						}
-						if !subTestHasSetEnv {
-							subTestHasSetEnv = hasSetenvMethod(p, innerTestVar)
-						}
 
 						return true
 					})
 
-					// Check if the sub test calls t.Parallel.
-					if !subTestHasParallel && !subTestHasSetEnv {
-						if n, ok := n.(*ast.CallExpr); ok {
-							funcArg := n.Args[1]
-							// insert parallel helper method
-							if fun, ok := funcArg.(*ast.FuncLit); ok {
-								tpStmt := buildTParallelStmt(fun.Body.Lbrace, innerTestVar)
-								fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
-							}
-						}
+					// Insert Parallel() unless the subtest already calls it, or the
+					// subtest (or a nested subtest) calls t.Setenv/t.Chdir etc.,
+					// which panic when the test or any ancestor is parallel.
+					if !subTestHasParallel && !deniesParallel(fun.Body, tIdents) {
+						tpStmt := buildTParallelStmt(fun.Body.Lbrace, innerTestVar)
+						fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
 					}
 
 					return true
@@ -167,8 +164,10 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 							rangeStatementHasParallelMethod = methodParallelIsCalledInMethodRun(n.X, innerTestVar)
 						}
 
-						if !rangeStatementHasSetEnvMethod {
-							rangeStatementHasSetEnvMethod = methodSetEnvIsCalledInMethodRun(n.X, innerTestVar)
+						if !rangeStatementDeniesParallel {
+							if fun := getRunCallback(n.X); fun != nil {
+								rangeStatementDeniesParallel = deniesParallel(fun.Body, tIdents)
+							}
 						}
 
 						if loopVariableUsedInRun == nil {
@@ -187,14 +186,16 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 			}
 		}
 
-		// Check if the main test calls Parallel().
-		if !testHasParallel && !testHasSetenv {
+		// Insert Parallel() unless the test already calls it, or the test (or
+		// any of its subtests, at any depth) calls t.Setenv/t.Chdir etc.:
+		// those panic when the test or any of its ancestors is parallel.
+		if !testHasParallel && !deniesParallel(funcDecl.Body, tIdents) {
 			tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace, testVar)
 			funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
 		}
 
 		// Check if the sub tests calls t.Parallel.
-		if rangeNode != nil && rangeStatementOverTestCasesExists && !rangeStatementHasParallelMethod && !rangeStatementHasSetEnvMethod {
+		if rangeNode != nil && rangeStatementOverTestCasesExists && !rangeStatementHasParallelMethod && !rangeStatementDeniesParallel {
 			var isInsertedTparallel bool
 
 			ast.Inspect(rangeNode, func(n ast.Node) bool {
@@ -322,8 +323,119 @@ func hasRunMethod(node ast.Node, testVar string) bool {
 	return exprCallHasMethod(node, testVar, "Run")
 }
 
-func hasSetenvMethod(node ast.Node, testVar string) bool {
-	return exprCallHasMethod(node, testVar, "Setenv")
+// parallelDenyingMethods are the *testing.T methods that panic when the test,
+// or any of its ancestors, has called Parallel() (see checkParallel in the
+// testing package).
+var parallelDenyingMethods = map[string]bool{
+	"Setenv": true, // Go 1.17+
+	"Chdir":  true, // Go 1.24+
+}
+
+// parallelDenyingFuncs are functions taking a *testing.T argument that have
+// the same constraint as parallelDenyingMethods.
+var parallelDenyingFuncs = map[string]bool{
+	"SetGlobalRandom": true, // testing/cryptotest, Go 1.26+
+}
+
+// testingTIdents returns the names of every *testing.T value in scope within
+// body: root (the test function's own parameter) plus the *testing.T parameter
+// of every function literal declared inside body, i.e. subtest callbacks.
+func testingTIdents(root string, body ast.Node) map[string]bool {
+	idents := map[string]bool{root: true}
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		fun, ok := n.(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+
+		for _, field := range fun.Type.Params.List {
+			if !isTestingT(field.Type) {
+				continue
+			}
+
+			for _, name := range field.Names {
+				idents[name.Name] = true
+			}
+		}
+
+		return true
+	})
+
+	return idents
+}
+
+// isTestingT reports whether expr is the type expression *testing.T.
+func isTestingT(expr ast.Expr) bool {
+	star, ok := expr.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+
+	sel, ok := star.X.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+
+	pkg, ok := sel.X.(*ast.Ident)
+
+	return ok && pkg.Name == testMethodPackageType && sel.Sel.Name == testMethodStruct
+}
+
+// deniesParallel reports whether node contains a call that forbids Parallel()
+// on the enclosing test and on all of its ancestors: t.Setenv, t.Chdir, or
+// cryptotest.SetGlobalRandom(t, ...) on any *testing.T named in tIdents.
+// Nested subtests are searched on purpose: a Setenv in a subtest also forbids
+// Parallel() in every enclosing test.
+func deniesParallel(node ast.Node, tIdents map[string]bool) bool {
+	var denies bool
+
+	ast.Inspect(node, func(n ast.Node) bool {
+		if denies {
+			return false
+		}
+
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+
+		if parallelDenyingMethods[sel.Sel.Name] {
+			if recv, ok := sel.X.(*ast.Ident); ok && tIdents[recv.Name] {
+				denies = true
+			}
+		}
+
+		if parallelDenyingFuncs[sel.Sel.Name] {
+			for _, arg := range call.Args {
+				if id, ok := arg.(*ast.Ident); ok && tIdents[id.Name] {
+					denies = true
+				}
+			}
+		}
+
+		return !denies
+	})
+
+	return denies
+}
+
+// In an expression of the form t.Run(x, func(q *testing.T) {...}), return the
+// function literal that is the subtest body, or nil if there is none.
+func getRunCallback(node ast.Node) *ast.FuncLit {
+	call, ok := node.(*ast.CallExpr)
+	if !ok || len(call.Args) < 2 {
+		return nil
+	}
+
+	fun, _ := call.Args[1].(*ast.FuncLit)
+
+	return fun
 }
 
 // In an expression of the form t.Run(x, func(q *testing.T) {...}), return the
@@ -383,28 +495,6 @@ func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
 	}
 
 	return isCalledParallel
-}
-
-func methodSetEnvIsCalledInMethodRun(node ast.Node, testVar string) bool {
-	var methodSetenvCalled bool
-
-	if callExp, ok := node.(*ast.CallExpr); ok {
-		for _, arg := range callExp.Args {
-			if !methodSetenvCalled {
-				ast.Inspect(arg, func(n ast.Node) bool {
-					if !methodSetenvCalled {
-						methodSetenvCalled = hasSetenvMethod(n, testVar)
-
-						return true
-					}
-
-					return false
-				})
-			}
-		}
-	}
-
-	return methodSetenvCalled
 }
 
 // build `<testVar>.Parallel()` statement to pos location specified in the argument.
@@ -483,26 +573,79 @@ func loopVarReAssigned(assign *ast.AssignStmt, vars []types.Object, typeInfo *ty
 	return false
 }
 
+// nolintTargets are the linter names that, when listed in a nolint directive,
+// exclude the file or function from tparagen.
+var nolintTargets = map[string]bool{
+	"all":          true,
+	"paralleltest": true,
+	"tparallel":    true,
+}
+
+// hasNolintCommentDirective reports whether the comment group contains a nolint
+// directive that applies to tparagen. Any other comment, including an ordinary
+// doc comment, does not count.
 func hasNolintCommentDirective(cg *ast.CommentGroup) bool {
 	for _, c := range cg.List {
-		if c.Text == "//nolint" || strings.Contains(c.Text, "paralleltest") || strings.Contains(c.Text, "tparallel") {
+		if isNolintDirectiveForTparagen(c.Text) {
 			return true
 		}
 	}
 
-	return true
+	return false
 }
 
-// check file top comment
-// if a file has a nolint comment at the beginning, the file is removed from the target.
-// also, if a specific linter (tparallel, paralleltest) is specified with a nolint comment, it is removed from the target.
-func isTparagenTargetFile(fileComments []*ast.CommentGroup) bool {
-	if len(fileComments) == 0 {
+// isNolintDirectiveForTparagen reports whether a single comment line is a
+// nolint directive that applies to tparagen: a bare `//nolint`, `//nolint:all`,
+// or one naming paralleltest/tparallel such as `//nolint:tparallel,paralleltest`.
+// The legacy space-separated form `//nolint tparallel` and a trailing
+// explanation (`//nolint:tparallel // reason`) are accepted too.
+func isNolintDirectiveForTparagen(text string) bool {
+	const prefix = "//nolint"
+
+	if !strings.HasPrefix(text, prefix) {
+		return false
+	}
+
+	rest := strings.TrimPrefix(text, prefix)
+
+	// Drop a trailing explanation.
+	if i := strings.Index(rest, "//"); i >= 0 {
+		rest = rest[:i]
+	}
+
+	rest = strings.TrimPrefix(strings.TrimSpace(rest), ":")
+
+	linters := strings.FieldsFunc(rest, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
+
+	// A bare //nolint disables every linter.
+	if len(linters) == 0 {
 		return true
 	}
 
-	if fileComments[0].Pos() == 1 {
-		return !hasNolintCommentDirective(fileComments[0])
+	for _, l := range linters {
+		if nolintTargets[l] {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isTparagenTargetFile reports whether the file should be processed at all.
+// A nolint directive placed anywhere before the package clause (on its own,
+// after a build constraint or a license header, or as the package doc comment)
+// excludes the whole file.
+func isTparagenTargetFile(f *ast.File) bool {
+	for _, cg := range f.Comments {
+		if cg.Pos() > f.Package {
+			break
+		}
+
+		if hasNolintCommentDirective(cg) {
+			return false
+		}
 	}
 
 	return true
