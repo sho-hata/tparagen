@@ -532,7 +532,6 @@ func TestSubFunctionMissingParallelHasSetenv(t *testing.T) {
 import "testing"
 
 func TestSubFunctionMissingParallelHasSetenv(t *testing.T) {
-	t.Parallel()
 	t.Run("1", func(t *testing.T) {
 		t.Setenv("TEST", "test")
 		fmt.Println("1")
@@ -661,7 +660,6 @@ func TestFunctionSubHasSetenvWithRangeTest(t *testing.T) {
 import "testing"
 
 func TestFunctionSubHasSetenvWithRangeTest(t *testing.T) {
-	t.Parallel()
 	testCases := []struct {
 		name string
 	}{{name: "foo"}}
