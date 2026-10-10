@@ -78,7 +78,7 @@ func SampleTest(t *testing.T) {
 }
 ```
 
-In Go versions earlier than 1.21, code to reassign the loop variable is inserted.(see: https://go.dev/blog/loopvar-preview)
+When the target code is written for a Go version earlier than 1.22, where the loop variable is shared between iterations (see: https://go.dev/blog/loopvar-preview), code to copy the loop variable is inserted as well. The version is taken from the `go` directive of the nearest `go.mod`; use `--min-go-version` to override it.
 
 ```go
 package test
@@ -107,7 +107,7 @@ func SampleTest(t *testing.T) {
 
 ### The following cases are supported
 - [x] Insert RunParallel helper function into the main/sub test function.
-- [x] Loop variables are not re-initialised if the minimum version of Go is less than 1.22
+- [x] Copy loop variables (`tc := tc`) before parallel subtests when the target Go version is earlier than 1.22 (detected from `go.mod`, or `--min-go-version`)
 - [x] Do not insert if `t.Setenv()`, `t.Chdir()` (Go 1.24+) or `cryptotest.SetGlobalRandom()` (Go 1.26+) is called in the test function or in any of its subtests. Those calls panic when the test or one of its ancestors is parallel.
 - [x] Ignore specified directories with cli option -i/-ignore
 - [x] nolint comment support: parallel,paralleltest
@@ -127,9 +127,14 @@ usage: tparagen [<flags>]
 
 
 Flags:
-  --[no-]help            Show context-sensitive help (also try --help-long and --help-man).
-  --ignore=IGNORE        ignore directory names. ex: foo,bar,baz (testdata directory is always ignored.)
-  --min-go-version=1.21  minimum go version
+  --[no-]help      Show context-sensitive help (also try --help-long and
+                   --help-man).
+  --ignore=IGNORE  ignore directory names. ex: foo,bar,baz (testdata directory
+                   is always ignored.)
+  --min-go-version=MIN-GO-VERSION
+                   minimum go version of the target code. ex: 1.21 (default:
+                   the go directive of the nearest go.mod. Loop variables are
+                   copied before parallel subtests when it is older than 1.22.)
 
 ```
 ## Installation
