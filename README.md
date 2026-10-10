@@ -108,7 +108,7 @@ func SampleTest(t *testing.T) {
 ### The following cases are supported
 - [x] Insert RunParallel helper function into the main/sub test function.
 - [x] Loop variables are not re-initialised if the minimum version of Go is less than 1.22
-- [x] Do not insert if `t.Setenv()` is called in the test function
+- [x] Do not insert if `t.Setenv()`, `t.Chdir()` (Go 1.24+) or `cryptotest.SetGlobalRandom()` (Go 1.26+) is called in the test function or in any of its subtests. Those calls panic when the test or one of its ancestors is parallel.
 - [x] Ignore specified directories with cli option -i/-ignore
 - [x] nolint comment support: parallel,paralleltest
 
