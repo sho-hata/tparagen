@@ -110,11 +110,27 @@ func SampleTest(t *testing.T) {
 - [x] Subtests started anywhere in a test: in range or three-clause for loops, in if/switch blocks, and inside other subtests.
 - [x] Copy loop variables (`tc := tc`) before parallel subtests when the target Go version is earlier than 1.22 (detected from `go.mod`, or `--min-go-version`)
 - [x] Do not insert if `t.Setenv()`, `t.Chdir()` (Go 1.24+) or `cryptotest.SetGlobalRandom()` (Go 1.26+) is called in the test function or in any of its subtests. Those calls panic when the test or one of its ancestors is parallel.
+- [x] Do not insert if the test function or any of its subtests changes global state: calls `os.Setenv`/`os.Unsetenv`/`os.Clearenv`/`os.Chdir`, `log.SetOutput`/`log.SetFlags`/`log.SetPrefix` or `slog.SetDefault`/`slog.SetLogLoggerLevel`, or assigns to a package-level variable (of any package), or a field or element of one.
 - [x] Ignore specified directories with cli option -i/-ignore
 - [x] nolint comment support: parallel,paralleltest
 
 ### The following cases are not supported
 - Don't insert if the test function calls another function that calls `Setenv()`.
+- Don't insert if the test function calls another function that changes global state.
+
+### Caveat: global state
+tparagen only reads the test code. It cannot see global state that is changed or shared somewhere else: by a helper function, by the code under test, or through a shared database, file or port. Making such tests parallel makes them race with each other.
+
+After running tparagen, run the tests with the race detector several times, and exclude the tests that fail with a nolint comment:
+
+```
+$ go test -race -count=5 ./...
+```
+
+```go
+//nolint:paralleltest // shares the global config with TestY
+func TestX(t *testing.T) {
+```
 
 ## Synopsis
 ```
