@@ -127,7 +127,7 @@ usage: tparagen [<flags>]
 
 
 Flags:
-  --[no-]help      Show context-sensitive help (also try --help-long and
+  -h, --[no-]help  Show context-sensitive help (also try --help-long and
                    --help-man).
   --ignore=IGNORE  ignore directory names. ex: foo,bar,baz (testdata directory
                    is always ignored.)

@@ -21,8 +21,9 @@ var (
 func main() {
 	now := time.Now()
 
-	kingpin.Parse()
+	// Must be set before Parse(), or -h is rejected as an unknown flag.
 	kingpin.HelpFlag.Short('h')
+	kingpin.Parse()
 
 	// Cancel the run gracefully on interruption (Ctrl+C) or termination (kill),
 	// so temporary files are cleaned up instead of being left behind.
@@ -30,7 +31,7 @@ func main() {
 	defer stop()
 
 	if err := tparagen.Run(ctx, os.Stdout, os.Stderr, strings.Split(*ignoreDirectories, ","), *minGoVersion); err != nil {
-		fmt.Println(err.Error())
+		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
 
