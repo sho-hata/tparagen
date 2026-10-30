@@ -56,93 +56,11 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 			return true
 		}
 
-		// Per-function state. It must start fresh for every test function:
-		// otherwise a Parallel() call found in one function would suppress
-		// the insertion in every function that follows it in the file.
-		var testHasParallel bool
-
 		// Names of every *testing.T value in scope within this function: the
 		// function's own parameter plus the parameter of every subtest closure.
 		tIdents := testingTIdents(testVar, funcDecl.Body)
 
-		// Look through the whole body, not only its top-level statements: a
-		// Parallel() call inside a block such as `if !testing.Short() { ... }`
-		// counts too, and calling Parallel() twice panics.
-		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
-			// Do not descend into subtests; their Parallel() calls
-			// belong to the subtest, not to this function.
-			if hasRunMethod(n, testVar) {
-				return false
-			}
-
-			if hasParallelMethod(n, testVar) {
-				testHasParallel = true
-			}
-
-			return !testHasParallel
-		})
-
-		var rangeStmts []*ast.RangeStmt
-
-		for _, l := range funcDecl.Body.List {
-			switch s := l.(type) {
-			case *ast.ExprStmt:
-				ast.Inspect(s, func(n ast.Node) bool {
-					// Check if the t.Run within the test function is calling t.Parallel
-					if !hasRunMethod(n, testVar) {
-						return true
-					}
-
-					// n is a call to t.Run; find out the name of the subtest's *testing.T parameter.
-					innerTestVar := getRunCallbackParameterName(n)
-					if innerTestVar == "" {
-						return true
-					}
-
-					fun := getRunCallback(n)
-					if fun == nil {
-						return true
-					}
-
-					var subTestHasParallel bool
-
-					ast.Inspect(s, func(p ast.Node) bool {
-						if !subTestHasParallel {
-							subTestHasParallel = hasParallelMethod(p, innerTestVar)
-						}
-
-						return true
-					})
-
-					// Insert Parallel() unless the subtest already calls it, or the
-					// subtest (or a nested subtest) calls t.Setenv/t.Chdir etc.,
-					// which panic when the test or any ancestor is parallel.
-					if !subTestHasParallel && !deniesParallel(fun.Body, tIdents) {
-						tpStmt := buildTParallelStmt(fun.Body.Lbrace, innerTestVar)
-						fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
-					}
-
-					return true
-				})
-
-			case *ast.RangeStmt:
-				rangeStmts = append(rangeStmts, s)
-			}
-		}
-
-		// Insert Parallel() unless the test already calls it, or the test (or
-		// any of its subtests, at any depth) calls t.Setenv/t.Chdir etc.:
-		// those panic when the test or any of its ancestors is parallel.
-		if !testHasParallel && !deniesParallel(funcDecl.Body, tIdents) {
-			tpStmt := buildTParallelStmt(funcDecl.Body.Lbrace, testVar)
-			funcDecl.Body.List = append([]ast.Stmt{tpStmt}, funcDecl.Body.List...)
-		}
-
-		// Every range loop is handled on its own: a test may run several
-		// tables of subtests one after another.
-		for _, r := range rangeStmts {
-			insertTParallelInRangeSubtests(r, testVar, tIdents, needFixLoopVar)
-		}
+		insertTParallel(funcDecl.Body, testVar, tIdents, needFixLoopVar)
 
 		return true
 	})
@@ -156,88 +74,102 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 	return fmtedBuf.Bytes(), nil
 }
 
-// insertTParallelInRangeSubtests inserts Parallel() into the subtests started
-// directly in the body of the range loop r, unless one of the loop's subtests
-// already calls Parallel() or forbids it. Before Go 1.22 (needFixLoopVar) the
-// loop variables captured by those subtests are copied as well.
-func insertTParallelInRangeSubtests(r *ast.RangeStmt, testVar string, tIdents map[string]bool, needFixLoopVar bool) {
-	var (
-		runExists, hasParallel, denies bool
+// insertTParallel inserts Parallel() into the test whose body is body and whose
+// *testing.T is named testVar, then does the same for each of its subtests,
+// wherever they are started: at the top level, in a loop, in an if block, or
+// in another subtest. It reports whether Parallel() was inserted into body.
+func insertTParallel(body *ast.BlockStmt, testVar string, tIdents map[string]bool, needFixLoopVar bool) bool {
+	// Insert Parallel() unless the test already calls it, or the test (or
+	// any of its subtests, at any depth) calls t.Setenv/t.Chdir etc.:
+	// those panic when the test or any of its ancestors is parallel.
+	insert := !callsParallel(body, testVar) && !deniesParallel(body, tIdents)
 
-		// Loop variables declared by r, and the subset that is referenced
-		// from a subtest callback inside it.
-		loopVars          = rangeLoopVarNames(r)
-		loopVarsUsedInRun = map[string]bool{}
-	)
-
-	ast.Inspect(r, func(n ast.Node) bool {
-		stmt, ok := n.(*ast.ExprStmt)
-		if !ok || !hasRunMethod(stmt.X, testVar) {
+	ast.PreorderStack(body, nil, func(n ast.Node, stack []ast.Node) bool {
+		if !hasRunMethod(n, testVar) {
 			return true
 		}
-		// stmt.X is a call to Run(); find out the name of the subtest's *testing.T parameter.
-		innerTestVar := getRunCallbackParameterName(stmt.X)
 
-		runExists = true
+		// n is a call to t.Run. Its subtest is handled by the recursive
+		// call below, with the subtest's own *testing.T name.
+		fun := getRunCallback(n)
+		innerTestVar := getRunCallbackParameterName(n)
 
-		if !hasParallel {
-			hasParallel = methodParallelIsCalledInMethodRun(stmt.X, innerTestVar)
-		}
-
-		if fun := getRunCallback(stmt.X); fun != nil {
-			if !denies {
-				denies = deniesParallel(fun.Body, tIdents)
-			}
-
-			for _, name := range loopVars {
-				if identReferenced(fun.Body, name) {
-					loopVarsUsedInRun[name] = true
-				}
-			}
-		}
-
-		return true
-	})
-
-	if !runExists || hasParallel || denies {
-		return
-	}
-
-	for _, stmt := range r.Body.List {
-		e, ok := stmt.(*ast.ExprStmt)
-		if !ok || !hasRunMethod(e.X, testVar) {
-			continue
-		}
-
-		fun := getRunCallback(e.X)
-		innerTestVar := getRunCallbackParameterName(e.X)
 		// No usable *testing.T name, e.g. `func(_ *testing.T)`.
 		if fun == nil || innerTestVar == "" {
+			return false
+		}
+
+		if insertTParallel(fun.Body, innerTestVar, tIdents, needFixLoopVar) && needFixLoopVar {
+			copyLoopVars(stack, fun)
+		}
+
+		return false
+	})
+
+	if insert {
+		tpStmt := buildTParallelStmt(body.Lbrace, testVar)
+		body.List = append([]ast.Stmt{tpStmt}, body.List...)
+	}
+
+	return insert
+}
+
+// callsParallel reports whether the test whose body is body calls
+// <testVar>.Parallel() anywhere outside its subtests, including inside blocks
+// such as `if !testing.Short() { t.Parallel() }`. Calling Parallel() twice
+// panics.
+func callsParallel(body *ast.BlockStmt, testVar string) bool {
+	var found bool
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		// Do not descend into subtests; their Parallel() calls belong to
+		// the subtest, not to this test.
+		if hasRunMethod(n, testVar) {
+			return false
+		}
+
+		if hasParallelMethod(n, testVar) {
+			found = true
+		}
+
+		return !found
+	})
+
+	return found
+}
+
+// copyLoopVars copies, at the top of each enclosing loop in stack, the loop
+// variables that the now parallel subtest fun captures: `tc := tc`. Before Go
+// 1.22 every iteration shares the same loop variable
+// (https://go.dev/doc/go1.22#language).
+func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) {
+	for _, n := range stack {
+		var (
+			loopVars []string
+			body     *ast.BlockStmt
+		)
+
+		switch loop := n.(type) {
+		case *ast.RangeStmt:
+			loopVars, body = rangeLoopVarNames(loop), loop.Body
+		case *ast.ForStmt:
+			loopVars, body = forLoopVarNames(loop), loop.Body
+		default:
 			continue
 		}
 
-		tpStmt := buildTParallelStmt(fun.Body.Lbrace, innerTestVar)
-		fun.Body.List = append([]ast.Stmt{tpStmt}, fun.Body.List...)
-	}
+		copied := loopVarsCopiedInBody(body, loopVars)
 
-	// Before Go 1.22 every iteration shares the same loop variable
-	// (https://go.dev/doc/go1.22#language), so a parallel subtest
-	// that captures it needs its own copy: `tc := tc`.
-	if !needFixLoopVar {
-		return
-	}
+		var copies []ast.Stmt
 
-	copied := loopVarsCopiedInBody(r, loopVars)
-
-	var copies []ast.Stmt
-
-	for _, name := range loopVars {
-		if loopVarsUsedInRun[name] && !copied[name] {
-			copies = append(copies, buildLoopVarReAssignmentStmt(r.Body.Lbrace, name))
+		for _, name := range loopVars {
+			if identReferenced(fun.Body, name) && !copied[name] {
+				copies = append(copies, buildLoopVarReAssignmentStmt(body.Lbrace, name))
+			}
 		}
-	}
 
-	r.Body.List = append(copies, r.Body.List...)
+		body.List = append(copies, body.List...)
+	}
 }
 
 // Checks if the function has the param type *testing.T; if it does, then the
@@ -459,28 +391,6 @@ func getRunCallbackParameterName(node ast.Node) string {
 	return ""
 }
 
-func methodParallelIsCalledInMethodRun(node ast.Node, testVar string) bool {
-	var isCalledParallel bool
-
-	if callExp, ok := node.(*ast.CallExpr); ok {
-		for _, arg := range callExp.Args {
-			if !isCalledParallel {
-				ast.Inspect(arg, func(n ast.Node) bool {
-					if !isCalledParallel {
-						isCalledParallel = hasParallelMethod(n, testVar)
-
-						return true
-					}
-
-					return false
-				})
-			}
-		}
-	}
-
-	return isCalledParallel
-}
-
 // build `<testVar>.Parallel()` statement to pos location specified in the argument.
 func buildTParallelStmt(pos token.Pos, testVar string) *ast.ExprStmt {
 	return &ast.ExprStmt{
@@ -534,6 +444,25 @@ func rangeLoopVarNames(r *ast.RangeStmt) []string {
 	return names
 }
 
+// forLoopVarNames returns the names of the variables declared by the init
+// statement of a three-clause for loop, such as i in `for i := 0; ...`.
+func forLoopVarNames(f *ast.ForStmt) []string {
+	assign, ok := f.Init.(*ast.AssignStmt)
+	if !ok || assign.Tok != token.DEFINE {
+		return nil
+	}
+
+	var names []string
+
+	for _, expr := range assign.Lhs {
+		if id, ok := expr.(*ast.Ident); ok && id.Name != "_" {
+			names = append(names, id.Name)
+		}
+	}
+
+	return names
+}
+
 // identReferenced reports whether an identifier called name occurs anywhere in
 // node. Shadowing is not resolved on purpose: a false positive only leads to a
 // harmless extra `name := name` copy.
@@ -551,13 +480,13 @@ func identReferenced(node ast.Node, name string) bool {
 	return found
 }
 
-// loopVarsCopiedInBody returns the loop variables that the range body already
+// loopVarsCopiedInBody returns the loop variables that the loop body already
 // re-declares with the `tc := tc` idiom (or `i, tc := i, tc`) directly at the
 // top level of the body.
-func loopVarsCopiedInBody(r *ast.RangeStmt, loopVars []string) map[string]bool {
+func loopVarsCopiedInBody(body *ast.BlockStmt, loopVars []string) map[string]bool {
 	copied := map[string]bool{}
 
-	for _, stmt := range r.Body.List {
+	for _, stmt := range body.List {
 		assign, ok := stmt.(*ast.AssignStmt)
 		if !ok || assign.Tok != token.DEFINE || len(assign.Lhs) != len(assign.Rhs) {
 			continue

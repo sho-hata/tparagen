@@ -107,6 +107,7 @@ func SampleTest(t *testing.T) {
 
 ### The following cases are supported
 - [x] Insert RunParallel helper function into the main/sub test function.
+- [x] Subtests started anywhere in a test: in range or three-clause for loops, in if/switch blocks, and inside other subtests.
 - [x] Copy loop variables (`tc := tc`) before parallel subtests when the target Go version is earlier than 1.22 (detected from `go.mod`, or `--min-go-version`)
 - [x] Do not insert if `t.Setenv()`, `t.Chdir()` (Go 1.24+) or `cryptotest.SetGlobalRandom()` (Go 1.26+) is called in the test function or in any of its subtests. Those calls panic when the test or one of its ancestors is parallel.
 - [x] Ignore specified directories with cli option -i/-ignore
