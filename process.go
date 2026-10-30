@@ -65,24 +65,22 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 		// function's own parameter plus the parameter of every subtest closure.
 		tIdents := testingTIdents(testVar, funcDecl.Body)
 
-		for _, l := range funcDecl.Body.List {
-			if s, ok := l.(*ast.ExprStmt); ok {
-				ast.Inspect(s, func(n ast.Node) bool {
-					// Do not descend into subtests; their Parallel() calls
-					// belong to the subtest, not to this function.
-					if hasRunMethod(n, testVar) {
-						return false
-					}
-
-					// Check if the test method is calling Parallel()
-					if !testHasParallel {
-						testHasParallel = hasParallelMethod(n, testVar)
-					}
-
-					return true
-				})
+		// Look through the whole body, not only its top-level statements: a
+		// Parallel() call inside a block such as `if !testing.Short() { ... }`
+		// counts too, and calling Parallel() twice panics.
+		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
+			// Do not descend into subtests; their Parallel() calls
+			// belong to the subtest, not to this function.
+			if hasRunMethod(n, testVar) {
+				return false
 			}
-		}
+
+			if hasParallelMethod(n, testVar) {
+				testHasParallel = true
+			}
+
+			return !testHasParallel
+		})
 
 		var (
 			rangeStatementOverTestCasesExists,
