@@ -58,9 +58,13 @@ echo "corpus: $(find "$work/pristine" -name '*_test.go' | wc -l | tr -d ' ') fil
   "$mb MB in $PACKAGES packages"
 
 # Rewriting is idempotent: a second run over rewritten files does nothing, so
-# every run starts from a fresh copy of the pristine corpus.
-printf -v restore 'rm -rf %q && cp -R %q %q' "$work/run" "$work/pristine" "$work/run"
-printf -v command 'cd %q && %q' "$work/run" "$work/tparagen"
+# every run starts from a fresh copy of the pristine corpus. tparagen always
+# works on the current directory, so hyperfine runs from inside the copy.
+# Neither command uses shell syntax such as &&, which newer hyperfine rejects.
+mkdir "$work/run"
+cd "$work/run"
+printf -v restore 'rsync -a --delete %q %q' "$work/pristine/" "$work/run/"
+printf -v command '%q' "$work/tparagen"
 
 "$HYPERFINE" --warmup 1 --runs "$RUNS" --prepare "$restore" --command-name tparagen --export-markdown "$OUT" "$command"
 

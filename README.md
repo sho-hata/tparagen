@@ -115,6 +115,24 @@ func SampleTest(t *testing.T) {
 ### The following cases are not supported
 - Don't insert if the test function calls another function that calls `Setenv()`.
 
+## Performance
+tparagen rewrites **3,000 test files (60,000 test functions, 11.7 MB in 200 packages) in about 0.7 seconds**, using about 64 MiB of memory.
+
+| Corpus | Wall time (mean ± σ) | Min … Max | Peak memory |
+|:---|---:|---:|---:|
+| 3,000 files / 60,000 tests / 200 packages | 689 ms ± 13 ms | 673 ms … 708 ms | 64 MiB |
+
+Measured with [hyperfine](https://github.com/sharkdp/hyperfine) (10 runs after 1 warmup run) on an Apple M4 Pro (12 cores) with Go 1.26.2. Every run starts from a fresh copy of a generated corpus, so each run really rewrites all 3,000 files. The corpus mixes table-driven tests, nested subtests, `if` blocks, `for` loops, `t.Setenv` and already parallel tests, and targets Go 1.21 so that loop variables are copied too.
+
+Numbers depend on your machine. To reproduce them, or to measure a corpus of a different size, run:
+
+```
+$ scripts/benchmark.sh                          # requires hyperfine
+$ PACKAGES=1000 FILES=10 scripts/benchmark.sh   # a bigger corpus
+```
+
+Every pull request runs the Go benchmarks (`go test -bench .`) for the pull request and for its base branch on the same machine, and the check fails on a statistically significant slowdown (see [`.github/workflows/bench.yml`](.github/workflows/bench.yml)).
+
 ## Synopsis
 ```
 $ tparagen
