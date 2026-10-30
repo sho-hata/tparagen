@@ -2,23 +2,23 @@ goos: linux
 goarch: amd64
 pkg: example.com/x
 cpu: seeded
-BenchmarkRun-4	100	1000000 ns/op	50000 B/op	500 allocs/op
-BenchmarkParse-4	100	99600 ns/op	5000 B/op	50 allocs/op
-BenchmarkRun-4	100	1004000 ns/op	50000 B/op	500 allocs/op
-BenchmarkParse-4	100	100499 ns/op	5000 B/op	50 allocs/op
-BenchmarkRun-4	100	997000 ns/op	50000 B/op	500 allocs/op
-BenchmarkParse-4	100	100099 ns/op	5000 B/op	50 allocs/op
-BenchmarkRun-4	100	1002000 ns/op	50000 B/op	500 allocs/op
-BenchmarkParse-4	100	99800 ns/op	5000 B/op	50 allocs/op
-BenchmarkRun-4	100	995000 ns/op	50000 B/op	500 allocs/op
-BenchmarkParse-4	100	100299 ns/op	5000 B/op	50 allocs/op
-BenchmarkRun-4	100	1002999 ns/op	50000 B/op	500 allocs/op
-BenchmarkParse-4	100	99500 ns/op	5000 B/op	50 allocs/op
-BenchmarkRun-4	100	998000 ns/op	50000 B/op	500 allocs/op
-BenchmarkParse-4	100	100200 ns/op	5000 B/op	50 allocs/op
-BenchmarkRun-4	100	1000999 ns/op	50000 B/op	500 allocs/op
-BenchmarkParse-4	100	99700 ns/op	5000 B/op	50 allocs/op
-BenchmarkRun-4	100	1004999 ns/op	50000 B/op	500 allocs/op
-BenchmarkParse-4	100	100400 ns/op	5000 B/op	50 allocs/op
-BenchmarkRun-4	100	996000 ns/op	50000 B/op	500 allocs/op
-BenchmarkParse-4	100	100000 ns/op	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	1000000 ns/op	20000000 peak-RSS-B	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	99600 ns/op	1992000 peak-RSS-B	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	1004000 ns/op	20080000 peak-RSS-B	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	100499 ns/op	2009999 peak-RSS-B	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	997000 ns/op	19940000 peak-RSS-B	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	100099 ns/op	2001999 peak-RSS-B	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	1002000 ns/op	20040000 peak-RSS-B	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	99800 ns/op	1996000 peak-RSS-B	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	995000 ns/op	19900000 peak-RSS-B	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	100299 ns/op	2005999 peak-RSS-B	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	1002999 ns/op	20059999 peak-RSS-B	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	99500 ns/op	1990000 peak-RSS-B	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	998000 ns/op	19960000 peak-RSS-B	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	100200 ns/op	2004000 peak-RSS-B	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	1000999 ns/op	20019999 peak-RSS-B	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	99700 ns/op	1994000 peak-RSS-B	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	1004999 ns/op	20099999 peak-RSS-B	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	100400 ns/op	2008000 peak-RSS-B	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	996000 ns/op	19920000 peak-RSS-B	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	100000 ns/op	2000000 peak-RSS-B	5000 B/op	50 allocs/op

@@ -46,6 +46,7 @@ jobs:
           cp -r internal/benchcorpus "$RUNNER_TEMP/base/internal/benchcorpus"
 
           if ! (cd "$RUNNER_TEMP/base" && go test -c -o "$RUNNER_TEMP/base.test" .); then
+            echo "::warning title=No benchmark baseline::The head benchmarks do not build against base $BASE_SHA (API changed). The regression gate did not run."
             {
               echo "### Benchmarks"
               echo "No baseline: the head benchmarks do not build against base \`$BASE_SHA\` (API changed). Nothing to compare."
@@ -59,13 +60,19 @@ jobs:
         if: steps.build.outputs.has_base == 'true'
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20261009192801-be2c69fb417e
 
-      # Alternating base and head cancels slow drift of the shared runner.
+      # Alternating base and head cancels slow drift of the shared runner. Run
+      # gets a fixed iteration count: each iteration is slow, and its setup is
+      # untimed, so the default 1s benchtime would spend most of the job there.
       - name: run benchmarks
         if: steps.build.outputs.has_base == 'true'
         run: |
           for _ in $(seq "$ROUNDS"); do
-            "$RUNNER_TEMP/base.test" -test.run '^$' -test.bench . -test.benchmem -test.count 1 >> old.txt
-            "$RUNNER_TEMP/head.test" -test.run '^$' -test.bench . -test.benchmem -test.count 1 >> new.txt
+            for side in base head; do
+              out=old.txt
+              [ "$side" = head ] && out=new.txt
+              "$RUNNER_TEMP/$side.test" -test.run '^$' -test.bench '^BenchmarkGenerateTParallel' -test.benchmem -test.count 1 >> "$out"
+              "$RUNNER_TEMP/$side.test" -test.run '^$' -test.bench '^BenchmarkRun$' -test.benchmem -test.benchtime 5x -test.count 1 >> "$out"
+            done
           done
 
       - name: compare and gate

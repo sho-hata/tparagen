@@ -21,6 +21,7 @@ func TestCheckControls(t *testing.T) {
 	}{
 		{"30% sec/op regression with p<0.05 fails", "sec_regress", []string{"Run-4 sec/op +30.00%", "Parse-4 sec/op +30.00%"}},
 		{"15% allocs/op regression fails", "allocs_regress", []string{"Run-4 allocs/op +15.00%", "Parse-4 allocs/op +14.00%"}},
+		{"15% peak-RSS-B regression fails", "rss_regress", []string{"Run-4 peak-RSS-B +15.00%", "Parse-4 peak-RSS-B +15.00%"}},
 		{"identical inputs pass", "identical", nil},
 		{"30% improvement passes", "improvement", nil},
 	}
@@ -67,8 +68,10 @@ func TestCheckThresholds(t *testing.T) {
 		p         string
 		wantFails bool
 	}{
-		{"sec/op at the limit passes", "sec/op", "+20.00%", "p=0.001", false},
-		{"sec/op above the limit fails", "sec/op", "+20.01%", "p=0.001", true},
+		{"sec/op at the limit passes", "sec/op", "+10.00%", "p=0.001", false},
+		{"sec/op above the limit fails", "sec/op", "+10.01%", "p=0.001", true},
+		{"peak-RSS-B at the limit passes", "peak-RSS-B", "+10.00%", "p=0.001", false},
+		{"peak-RSS-B above the limit fails", "peak-RSS-B", "+10.01%", "p=0.001", true},
 		{"B/op above the limit fails", "B/op", "+10.50%", "p=0.001", true},
 		{"B/op below the limit passes", "B/op", "+9.00%", "p=0.001", false},
 		{"allocs/op above the limit fails", "allocs/op", "+10.50%", "p=0.001", true},
@@ -114,7 +117,7 @@ func TestFixturesMatchBenchstat(t *testing.T) {
 		t.Skip("BENCHSTAT not set")
 	}
 
-	for _, name := range []string{"identical", "sec_regress", "allocs_regress", "improvement"} {
+	for _, name := range []string{"identical", "sec_regress", "allocs_regress", "rss_regress", "improvement"} {
 		cmd := exec.Command(bin, "-format", "csv", "base.txt", name+".txt")
 		cmd.Dir = "testdata"
 

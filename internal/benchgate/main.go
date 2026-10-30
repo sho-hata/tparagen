@@ -20,9 +20,10 @@ const alpha = 0.05
 // maxRegressionPercent is how much worse, in percent, each unit may get before
 // the gate fails. Units not listed here (e.g. B/s) are ignored.
 var maxRegressionPercent = map[string]float64{
-	"sec/op":    20,
-	"B/op":      10,
-	"allocs/op": 10,
+	"sec/op":     10,
+	"B/op":       10,
+	"allocs/op":  10,
+	"peak-RSS-B": 10,
 }
 
 type regression struct {
