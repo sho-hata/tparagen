@@ -39,6 +39,8 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 		return src, nil
 	}
 
+	imports := importNames(f)
+
 	ast.Inspect(f, func(n ast.Node) bool {
 		funcDecl, ok := n.(*ast.FuncDecl)
 		if !ok {
@@ -56,11 +58,13 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 			return true
 		}
 
-		// Names of every *testing.T value in scope within this function: the
-		// function's own parameter plus the parameter of every subtest closure.
-		tIdents := testingTIdents(testVar, funcDecl.Body)
+		scope := &testScope{
+			tIdents: testingTIdents(testVar, funcDecl.Body),
+			locals:  localNames(funcDecl),
+			imports: imports,
+		}
 
-		insertTParallel(funcDecl.Body, testVar, tIdents, needFixLoopVar, true)
+		insertTParallel(funcDecl.Body, testVar, scope, needFixLoopVar, true)
 
 		return true
 	})
@@ -79,11 +83,11 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 // wherever they are started: at the top level, in a loop, in an if block, or
 // in another subtest. Parallel() is inserted into body itself only if
 // mayParallel. It reports whether Parallel() was inserted into body.
-func insertTParallel(body *ast.BlockStmt, testVar string, tIdents map[string]bool, needFixLoopVar, mayParallel bool) bool {
+func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, needFixLoopVar, mayParallel bool) bool {
 	// Insert Parallel() unless the test already calls it, or the test (or
-	// any of its subtests, at any depth) calls t.Setenv/t.Chdir etc.:
-	// those panic when the test or any of its ancestors is parallel.
-	insert := mayParallel && !callsParallel(body, testVar) && !deniesParallel(body, tIdents)
+	// any of its subtests, at any depth) calls t.Setenv/t.Chdir etc. or
+	// changes global state: see deniesParallel.
+	insert := mayParallel && !callsParallel(body, testVar) && !deniesParallel(body, scope)
 
 	ast.PreorderStack(body, nil, func(n ast.Node, stack []ast.Node) bool {
 		if !hasRunMethod(n, testVar) {
@@ -107,7 +111,7 @@ func insertTParallel(body *ast.BlockStmt, testVar string, tIdents map[string]boo
 		_, resultDiscarded := stack[len(stack)-1].(*ast.ExprStmt)
 		mayParallel := resultDiscarded && !capturesReassignedLoopVar(stack, fun)
 
-		if insertTParallel(fun.Body, innerTestVar, tIdents, needFixLoopVar, mayParallel) && needFixLoopVar {
+		if insertTParallel(fun.Body, innerTestVar, scope, needFixLoopVar, mayParallel) && needFixLoopVar {
 			copyLoopVars(stack, fun)
 		}
 
@@ -323,6 +327,184 @@ var parallelDenyingFuncs = map[string]bool{
 	"SetGlobalRandom": true, // testing/cryptotest, Go 1.26+
 }
 
+// globalStateFuncs are package-level functions, by import path, that change
+// process-wide state. A test calling one races with every other parallel test.
+var globalStateFuncs = map[string]map[string]bool{
+	"os":       {"Setenv": true, "Unsetenv": true, "Clearenv": true, "Chdir": true},
+	"log":      {"SetOutput": true, "SetFlags": true, "SetPrefix": true},
+	"log/slog": {"SetDefault": true, "SetLogLoggerLevel": true},
+}
+
+// testScope holds what deniesParallel needs to know about the names used in a
+// test function.
+type testScope struct {
+	// tIdents are the names of every *testing.T value in scope: the test
+	// function's own parameter plus the parameter of every subtest closure.
+	tIdents map[string]bool
+	// locals are the names declared anywhere inside the test function.
+	// Assigning any other name changes a package-level variable.
+	locals map[string]bool
+	// imports maps the name a package is referred to by in the file to its
+	// import path.
+	imports map[string]string
+}
+
+// importNames maps the name each package imported by f is referred to by to
+// its import path. The name of an import without an alias is guessed from the
+// last path element, skipping a major version suffix such as v2.
+func importNames(f *ast.File) map[string]string {
+	names := map[string]string{}
+
+	for _, spec := range f.Imports {
+		path := strings.Trim(spec.Path.Value, `"`)
+
+		if spec.Name != nil {
+			names[spec.Name.Name] = path
+
+			continue
+		}
+
+		elems := strings.Split(path, "/")
+		name := elems[len(elems)-1]
+
+		if len(elems) > 1 && isMajorVersionSuffix(name) {
+			name = elems[len(elems)-2]
+		}
+
+		names[name] = path
+	}
+
+	return names
+}
+
+// isMajorVersionSuffix reports whether s is a module major version path
+// element such as v2.
+func isMajorVersionSuffix(s string) bool {
+	if len(s) < 2 || s[0] != 'v' {
+		return false
+	}
+
+	for _, r := range s[1:] {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// localNames returns the names declared anywhere inside funcDecl: parameters
+// and results of the function and of every function literal in it, and every
+// variable declared with :=, var or range. Scopes are not resolved: a local
+// variable shadowing a package-level one hides assignments to the latter.
+func localNames(funcDecl *ast.FuncDecl) map[string]bool {
+	names := map[string]bool{}
+
+	addFields := func(fields *ast.FieldList) {
+		if fields == nil {
+			return
+		}
+
+		for _, field := range fields.List {
+			for _, name := range field.Names {
+				names[name.Name] = true
+			}
+		}
+	}
+
+	addIdents := func(exprs ...ast.Expr) {
+		for _, expr := range exprs {
+			if id, ok := expr.(*ast.Ident); ok {
+				names[id.Name] = true
+			}
+		}
+	}
+
+	addFields(funcDecl.Type.Params)
+	addFields(funcDecl.Type.Results)
+
+	ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			addFields(n.Type.Params)
+			addFields(n.Type.Results)
+		case *ast.AssignStmt:
+			if n.Tok == token.DEFINE {
+				addIdents(n.Lhs...)
+			}
+		case *ast.RangeStmt:
+			if n.Tok == token.DEFINE {
+				addIdents(n.Key, n.Value)
+			}
+		case *ast.ValueSpec:
+			for _, name := range n.Names {
+				names[name.Name] = true
+			}
+		}
+
+		return true
+	})
+
+	return names
+}
+
+// changesGlobalState reports whether n changes process-wide state: it calls
+// one of globalStateFuncs, or assigns to (or increments) a package-level
+// variable, of this package or another one, or a field or element of one.
+func (s *testScope) changesGlobalState(n ast.Node) bool {
+	var lhs []ast.Expr
+
+	switch n := n.(type) {
+	case *ast.CallExpr:
+		sel, ok := n.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+
+		pkg, ok := sel.X.(*ast.Ident)
+
+		return ok && !s.locals[pkg.Name] && globalStateFuncs[s.imports[pkg.Name]][sel.Sel.Name]
+	case *ast.AssignStmt:
+		if n.Tok == token.DEFINE {
+			return false
+		}
+
+		lhs = n.Lhs
+	case *ast.IncDecStmt:
+		lhs = []ast.Expr{n.X}
+	default:
+		return false
+	}
+
+	for _, expr := range lhs {
+		if root := rootIdent(expr); root != nil && root.Name != "_" && !s.locals[root.Name] {
+			return true
+		}
+	}
+
+	return false
+}
+
+// rootIdent returns the variable that expr, the left-hand side of an
+// assignment, is part of: v in v, v.f, v[i] and v.f[i].g. It returns nil when
+// expr is not rooted in a variable, as in *p or f().x.
+func rootIdent(expr ast.Expr) *ast.Ident {
+	for {
+		switch e := expr.(type) {
+		case *ast.Ident:
+			return e
+		case *ast.SelectorExpr:
+			expr = e.X
+		case *ast.IndexExpr:
+			expr = e.X
+		case *ast.ParenExpr:
+			expr = e.X
+		default:
+			return nil
+		}
+	}
+}
+
 // testingTIdents returns the names of every *testing.T value in scope within
 // body: root (the test function's own parameter) plus the *testing.T parameter
 // of every function literal declared inside body, i.e. subtest callbacks.
@@ -370,14 +552,21 @@ func isTestingT(expr ast.Expr) bool {
 
 // deniesParallel reports whether node contains a call that forbids Parallel()
 // on the enclosing test and on all of its ancestors: t.Setenv, t.Chdir, or
-// cryptotest.SetGlobalRandom(t, ...) on any *testing.T named in tIdents.
-// Nested subtests are searched on purpose: a Setenv in a subtest also forbids
-// Parallel() in every enclosing test.
-func deniesParallel(node ast.Node, tIdents map[string]bool) bool {
+// cryptotest.SetGlobalRandom(t, ...) on any *testing.T named in scope.tIdents,
+// or code that changes global state (see changesGlobalState), which races
+// with other parallel tests. Nested subtests are searched on purpose: a
+// Setenv in a subtest also forbids Parallel() in every enclosing test.
+func deniesParallel(node ast.Node, scope *testScope) bool {
 	var denies bool
 
 	ast.Inspect(node, func(n ast.Node) bool {
 		if denies {
+			return false
+		}
+
+		if scope.changesGlobalState(n) {
+			denies = true
+
 			return false
 		}
 
@@ -392,14 +581,14 @@ func deniesParallel(node ast.Node, tIdents map[string]bool) bool {
 		}
 
 		if parallelDenyingMethods[sel.Sel.Name] {
-			if recv, ok := sel.X.(*ast.Ident); ok && tIdents[recv.Name] {
+			if recv, ok := sel.X.(*ast.Ident); ok && scope.tIdents[recv.Name] {
 				denies = true
 			}
 		}
 
 		if parallelDenyingFuncs[sel.Sel.Name] {
 			for _, arg := range call.Args {
-				if id, ok := arg.(*ast.Ident); ok && tIdents[id.Name] {
+				if id, ok := arg.(*ast.Ident); ok && scope.tIdents[id.Name] {
 					denies = true
 				}
 			}
