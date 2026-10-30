@@ -127,14 +127,15 @@ usage: tparagen [<flags>]
 
 
 Flags:
-  --[no-]help      Show context-sensitive help (also try --help-long and
-                   --help-man).
-  --ignore=IGNORE  ignore directory names. ex: foo,bar,baz (testdata directory
-                   is always ignored.)
-  --min-go-version=MIN-GO-VERSION
-                   minimum go version of the target code. ex: 1.21 (default:
-                   the go directive of the nearest go.mod. Loop variables are
-                   copied before parallel subtests when it is older than 1.22.)
+  -h, --[no-]help      Show context-sensitive help (also try --help-long and
+                       --help-man).
+      --ignore=IGNORE  ignore directory names. ex: foo,bar,baz (testdata
+                       directory is always ignored.)
+      --min-go-version=MIN-GO-VERSION
+                       minimum go version of the target code. ex: 1.21 (default:
+                       the go directive of the nearest go.mod. Loop variables
+                       are copied before parallel subtests when it is older than
+                       1.22.)
 
 ```
 ## Installation
