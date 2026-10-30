@@ -1,0 +1,24 @@
+goos: linux
+goarch: amd64
+pkg: example.com/x
+cpu: seeded
+BenchmarkRun-4	100	700000 ns/op	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	69720 ns/op	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	702800 ns/op	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	70349 ns/op	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	697900 ns/op	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	70069 ns/op	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	701400 ns/op	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	69860 ns/op	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	696500 ns/op	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	70209 ns/op	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	702099 ns/op	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	69650 ns/op	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	698600 ns/op	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	70140 ns/op	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	700699 ns/op	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	69790 ns/op	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	703499 ns/op	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	70280 ns/op	5000 B/op	50 allocs/op
+BenchmarkRun-4	100	697200 ns/op	50000 B/op	500 allocs/op
+BenchmarkParse-4	100	70000 ns/op	5000 B/op	50 allocs/op
