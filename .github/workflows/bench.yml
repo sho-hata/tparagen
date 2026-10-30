@@ -74,7 +74,7 @@ jobs:
           {
             echo "### Benchmarks: base \`${BASE_SHA::7}\` vs head"
             echo '```'
-            benchstat old.txt new.txt
+            benchstat old.txt new.txt | tee /dev/stderr
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
