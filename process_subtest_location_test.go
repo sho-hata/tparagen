@@ -238,6 +238,117 @@ func TestX(t *testing.T) {
 }
 `,
 		},
+		{
+			testCase: "subtest whose result is used is not made parallel",
+			src: `package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	if !t.Run("setup", func(t *testing.T) {
+		fmt.Println("setup")
+	}) {
+		t.FailNow()
+	}
+	ok := t.Run("1", func(t *testing.T) {
+		t.Run("inner", func(t *testing.T) {
+			fmt.Println("inner")
+		})
+	})
+	_ = ok
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	if !t.Run("setup", func(t *testing.T) {
+		fmt.Println("setup")
+	}) {
+		t.FailNow()
+	}
+	ok := t.Run("1", func(t *testing.T) {
+		t.Run("inner", func(t *testing.T) {
+			t.Parallel()
+			fmt.Println("inner")
+		})
+	})
+	_ = ok
+}
+`,
+		},
+		{
+			testCase: "subtest capturing a variable the loop reassigns is not made parallel",
+			src: `package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	i := 0
+	for i < 3 {
+		t.Run("1", func(t *testing.T) {
+			fmt.Println(i)
+		})
+		t.Run("2", func(t *testing.T) {
+			fmt.Println("2")
+		})
+		i++
+	}
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	i := 0
+	for i < 3 {
+		t.Run("1", func(t *testing.T) {
+			fmt.Println(i)
+		})
+		t.Run("2", func(t *testing.T) {
+			t.Parallel()
+			fmt.Println("2")
+		})
+		i++
+	}
+}
+`,
+		},
+		{
+			testCase:       "subtest capturing a range variable assigned with = is not made parallel",
+			needFixLoopVar: true,
+			src: `package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	var tc string
+	for _, tc = range []string{"a", "b"} {
+		t.Run(tc, func(t *testing.T) {
+			fmt.Println(tc)
+		})
+	}
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	var tc string
+	for _, tc = range []string{"a", "b"} {
+		t.Run(tc, func(t *testing.T) {
+			fmt.Println(tc)
+		})
+	}
+}
+`,
+		},
 	}
 
 	for _, tt := range tests {

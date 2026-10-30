@@ -60,7 +60,7 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 		// function's own parameter plus the parameter of every subtest closure.
 		tIdents := testingTIdents(testVar, funcDecl.Body)
 
-		insertTParallel(funcDecl.Body, testVar, tIdents, needFixLoopVar)
+		insertTParallel(funcDecl.Body, testVar, tIdents, needFixLoopVar, true)
 
 		return true
 	})
@@ -77,12 +77,13 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 // insertTParallel inserts Parallel() into the test whose body is body and whose
 // *testing.T is named testVar, then does the same for each of its subtests,
 // wherever they are started: at the top level, in a loop, in an if block, or
-// in another subtest. It reports whether Parallel() was inserted into body.
-func insertTParallel(body *ast.BlockStmt, testVar string, tIdents map[string]bool, needFixLoopVar bool) bool {
+// in another subtest. Parallel() is inserted into body itself only if
+// mayParallel. It reports whether Parallel() was inserted into body.
+func insertTParallel(body *ast.BlockStmt, testVar string, tIdents map[string]bool, needFixLoopVar, mayParallel bool) bool {
 	// Insert Parallel() unless the test already calls it, or the test (or
 	// any of its subtests, at any depth) calls t.Setenv/t.Chdir etc.:
 	// those panic when the test or any of its ancestors is parallel.
-	insert := !callsParallel(body, testVar) && !deniesParallel(body, tIdents)
+	insert := mayParallel && !callsParallel(body, testVar) && !deniesParallel(body, tIdents)
 
 	ast.PreorderStack(body, nil, func(n ast.Node, stack []ast.Node) bool {
 		if !hasRunMethod(n, testVar) {
@@ -99,7 +100,14 @@ func insertTParallel(body *ast.BlockStmt, testVar string, tIdents map[string]boo
 			return false
 		}
 
-		if insertTParallel(fun.Body, innerTestVar, tIdents, needFixLoopVar) && needFixLoopVar {
+		// A parallel subtest's t.Run returns before the subtest finishes, so
+		// one whose result is used (`if !t.Run(...)`) must stay sequential.
+		// So must one that captures a variable its enclosing loop reassigns:
+		// every parallel subtest would see the value after the loop ends.
+		_, resultDiscarded := stack[len(stack)-1].(*ast.ExprStmt)
+		mayParallel := resultDiscarded && !capturesReassignedLoopVar(stack, fun)
+
+		if insertTParallel(fun.Body, innerTestVar, tIdents, needFixLoopVar, mayParallel) && needFixLoopVar {
 			copyLoopVars(stack, fun)
 		}
 
@@ -136,6 +144,68 @@ func callsParallel(body *ast.BlockStmt, testVar string) bool {
 	})
 
 	return found
+}
+
+// capturesReassignedLoopVar reports whether fun references a variable that an
+// enclosing loop in stack assigns, other than the variables the loop declares
+// (which are per-iteration from Go 1.22, and copied by copyLoopVars before).
+// For example i in `for i < 3 { ...; i++ }`, or tc in `for _, tc = range xs`.
+// Assignments inside fun itself are not counted.
+func capturesReassignedLoopVar(stack []ast.Node, fun *ast.FuncLit) bool {
+	for _, n := range stack {
+		var declared []string
+
+		switch loop := n.(type) {
+		case *ast.RangeStmt:
+			declared = rangeLoopVarNames(loop)
+
+			if loop.Tok == token.ASSIGN {
+				for _, expr := range []ast.Expr{loop.Key, loop.Value} {
+					if id, ok := expr.(*ast.Ident); ok && identReferenced(fun.Body, id.Name) {
+						return true
+					}
+				}
+			}
+		case *ast.ForStmt:
+			declared = forLoopVarNames(loop)
+		default:
+			continue
+		}
+
+		var captured bool
+
+		ast.Inspect(n, func(m ast.Node) bool {
+			if captured || m == fun {
+				return false
+			}
+
+			var lhs []ast.Expr
+
+			switch s := m.(type) {
+			case *ast.AssignStmt:
+				if s.Tok != token.DEFINE {
+					lhs = s.Lhs
+				}
+			case *ast.IncDecStmt:
+				lhs = []ast.Expr{s.X}
+			}
+
+			for _, expr := range lhs {
+				id, ok := expr.(*ast.Ident)
+				if ok && !slices.Contains(declared, id.Name) && identReferenced(fun.Body, id.Name) {
+					captured = true
+				}
+			}
+
+			return !captured
+		})
+
+		if captured {
+			return true
+		}
+	}
+
+	return false
 }
 
 // copyLoopVars copies, at the top of each enclosing loop in stack, the loop
@@ -431,8 +501,14 @@ func buildLoopVarReAssignmentStmt(pos token.Pos, varName string) *ast.AssignStmt
 }
 
 // rangeLoopVarNames returns the names of the variables declared by a range
-// statement (key and/or value), skipping the blank identifier.
+// statement (key and/or value), skipping the blank identifier. A range
+// statement that assigns existing variables (`for _, tc = range`) declares
+// none.
 func rangeLoopVarNames(r *ast.RangeStmt) []string {
+	if r.Tok != token.DEFINE {
+		return nil
+	}
+
 	var names []string
 
 	for _, expr := range []ast.Expr{r.Key, r.Value} {
