@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
+	"go/build/constraint"
 	"go/format"
 	"go/parser"
 	"go/token"
+	"go/version"
 	"slices"
 	"strings"
 	"unicode"
@@ -37,6 +39,12 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 
 	if !isTparagenTargetFile(f) {
 		return src, nil
+	}
+
+	// A `//go:build go1.N` line sets the language version of this file, so
+	// it can need loop variable copies even when go.mod does not.
+	if !needFixLoopVar {
+		needFixLoopVar = buildConstraintNeedsLoopVarFix(f)
 	}
 
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -637,6 +645,34 @@ func isNolintDirectiveForTparagen(text string) bool {
 	for _, l := range linters {
 		if nolintTargets[l] {
 			return true
+		}
+	}
+
+	return false
+}
+
+// buildConstraintNeedsLoopVarFix reports whether the file's //go:build line
+// pins it to a Go version before loopVarFixVersion, where every iteration
+// shares the loop variable.
+func buildConstraintNeedsLoopVarFix(f *ast.File) bool {
+	for _, cg := range f.Comments {
+		if cg.Pos() > f.Package {
+			break
+		}
+
+		for _, c := range cg.List {
+			if !constraint.IsGoBuild(c.Text) {
+				continue
+			}
+
+			expr, err := constraint.Parse(c.Text)
+			if err != nil {
+				return false
+			}
+
+			v := constraint.GoVersion(expr)
+
+			return v != "" && version.Compare(v, loopVarFixVersion) < 0
 		}
 	}
 
