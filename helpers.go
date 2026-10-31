@@ -1,8 +1,10 @@
 package tparagen
 
 import (
+	"bytes"
 	"go/ast"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -438,6 +440,35 @@ func isTestingValue(expr ast.Expr, testing string) bool {
 	switch sel.Sel.Name {
 	case "T", "B", "F", "TB":
 		return true
+	}
+
+	return false
+}
+
+var (
+	funcDeclStart = regexp.MustCompile(`(?m)^func\b`)
+	funcName      = regexp.MustCompile(`^func\s*(?:\([^)]*\)\s*)?([\pL_][\pL\pN_]*)`)
+	testingParam  = regexp.MustCompile(`\.(?:T|B|F|TB)\b`)
+)
+
+// mayDeclareHelper reports whether src may declare a function, other than a
+// test, benchmark or fuzz test, that takes a testing value. It looks at the
+// text of each declaration up to its body, so it can only err towards true.
+func mayDeclareHelper(src []byte) bool {
+	for _, loc := range funcDeclStart.FindAllIndex(src, -1) {
+		header := src[loc[0]:]
+		if end := bytes.IndexByte(header, '{'); end >= 0 {
+			header = header[:end]
+		}
+
+		if !testingParam.Match(header) {
+			continue
+		}
+
+		m := funcName.FindSubmatch(header)
+		if m == nil || !isEntryPoint(&ast.FuncDecl{Name: ast.NewIdent(string(m[1]))}) || bytes.HasPrefix(bytes.TrimPrefix(header, []byte("func")), []byte(" (")) {
+			return true
+		}
 	}
 
 	return false

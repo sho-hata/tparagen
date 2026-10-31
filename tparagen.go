@@ -157,8 +157,10 @@ func (t *tparagen) scan(ctx context.Context) ([]testFile, *helperIndex, error) {
 		}
 
 		// Only a file importing testing can declare a helper taking a
-		// *testing.T.
-		if !bytes.Contains(src, []byte(`"testing"`)) {
+		// *testing.T, and most test files declare no function other than
+		// their tests: parsing them only to find that out would double the
+		// parsing work of the run.
+		if !bytes.Contains(src, []byte(`"testing"`)) || !mayDeclareHelper(src) {
 			return nil
 		}
 

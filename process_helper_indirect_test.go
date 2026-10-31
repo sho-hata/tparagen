@@ -275,3 +275,31 @@ func TestX(t *testing.T) {
 		})
 	}
 }
+
+func TestMayDeclareHelper(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"tests only", "func TestX(t *testing.T) {}\nfunc BenchmarkX(b *testing.B) {}\nfunc FuzzX(f *testing.F) {}\n", false},
+		{"no testing parameter", "func helper(s string) {}\n", false},
+		{"helper", "func setEnv(t *testing.T) {}\n", true},
+		{"generic helper", "func set[V any](t *testing.T, v V) {}\n", true},
+		{"method named like a test", "func (s *suite) TestX(t *testing.T) {}\n", true},
+		{"parameters over several lines", "func setEnv(\n\tname string,\n\ttb testing.TB,\n) {}\n", true},
+		{"testing under another name", "func setEnv(t *tst.T) {}\n", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := mayDeclareHelper([]byte(tt.src)); got != tt.want {
+				t.Errorf("mayDeclareHelper() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
