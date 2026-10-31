@@ -119,6 +119,7 @@ func SampleTest(t *testing.T) {
 
 ### The following cases are not supported
 - Don't insert if the test function calls a helper that calls `Setenv()` when the helper is declared outside the processed directory (run tparagen from the module root), or is called through a function value or an interface.
+- Don't insert if a helper reaches `Setenv()` on a copy of its parameter (`t := tb; t.Setenv(...)`) or on a stored field (`f.t.Setenv(...)`) instead of the parameter itself.
 - Don't insert if the test function calls another function that changes global state.
 
 ### Caveat: global state

@@ -91,6 +91,7 @@ func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers
 	}
 
 	imports := importNames(f)
+	fileImports := newFileImports(f)
 	pkg := packageOf(filename, f)
 
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -111,12 +112,13 @@ func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers
 		}
 
 		scope := &testScope{
-			tIdents: testingTIdents(testVar, funcDecl.Body),
-			locals:  localNames(funcDecl),
-			imports: imports,
-			pkg:     pkg,
-			helpers: helpers,
-			stats:   &stats,
+			tIdents:     testingTIdents(testVar, funcDecl.Body),
+			locals:      localNames(funcDecl),
+			imports:     imports,
+			fileImports: fileImports,
+			pkg:         pkg,
+			helpers:     helpers,
+			stats:       &stats,
 		}
 		scope.localHelpers = localDenyingClosures(funcDecl.Body, scope)
 
@@ -558,6 +560,9 @@ type testScope struct {
 	imports map[string]string
 	// pkg is the package of the file.
 	pkg pkgID
+	// fileImports is how the file refers to the packages it imports, to
+	// resolve calls to helpers.
+	fileImports *fileImports
 	// helpers are the helper functions known to deny Parallel().
 	helpers *helperIndex
 	// localHelpers are the names of the function literals declared in the
@@ -814,7 +819,7 @@ func testingTIdents(root string, body ast.Node) map[string]bool {
 		}
 
 		for _, field := range fun.Type.Params.List {
-			if !isTestingValue(field.Type) {
+			if !isTestingValue(field.Type, testMethodPackageType) {
 				continue
 			}
 
@@ -864,7 +869,7 @@ func deniesParallel(node ast.Node, scope *testScope) bool {
 		}
 
 		denies = forbidsParallel(call, scope.tIdents) ||
-			scope.helpers.deniesParallel(call, scope.pkg, scope.imports, local, scope.tIdents)
+			scope.helpers.deniesParallel(call, scope.pkg, scope.fileImports, local, scope.tIdents)
 
 		return !denies
 	})

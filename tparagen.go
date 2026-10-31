@@ -110,10 +110,11 @@ func (t *tparagen) run(ctx context.Context) error {
 	return nil
 }
 
-// testFile is a _test.go file to process.
+// testFile is a _test.go file to process. Its source is read again when it
+// is processed: holding every source until then would cost as much memory as
+// the test code of the whole tree.
 type testFile struct {
 	path string
-	src  []byte
 }
 
 // scan walks t.in and returns the _test.go files to process. It also indexes
@@ -151,7 +152,7 @@ func (t *tparagen) scan(ctx context.Context) ([]testFile, *helperIndex, error) {
 
 		if isTest {
 			mu.Lock()
-			testFiles = append(testFiles, testFile{path: path, src: src})
+			testFiles = append(testFiles, testFile{path: path})
 			mu.Unlock()
 		}
 
@@ -205,7 +206,14 @@ func (t *tparagen) importPath(dir string) string {
 		return mod.path
 	}
 
-	return mod.path + "/" + filepath.ToSlash(rel)
+	rel = filepath.ToSlash(rel)
+
+	// A vendored package is imported by its own path, not by its directory.
+	if i := strings.LastIndex("/"+rel, "/vendor/"); i >= 0 {
+		return rel[i+len("vendor/"):]
+	}
+
+	return mod.path + "/" + rel
 }
 
 // processTestFiles rewrites files concurrently and stores the contents that
@@ -260,12 +268,17 @@ func (t *tparagen) processTestFile(file testFile, helpers *helperIndex, changes,
 		return err
 	}
 
-	got, s, err := generateTParallel(file.path, file.src, needFix, helpers)
+	src, err := os.ReadFile(file.path)
+	if err != nil {
+		return fmt.Errorf("cannot read %s. %w", file.path, err)
+	}
+
+	got, s, err := generateTParallel(file.path, src, needFix, helpers)
 	if err != nil {
 		return fmt.Errorf("error occurred in Process(). %w", err)
 	}
 
-	if !bytes.Equal(file.src, got) {
+	if !bytes.Equal(src, got) {
 		s.rewritten = true
 
 		changes.Store(file.path, got)
