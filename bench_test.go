@@ -58,7 +58,7 @@ const peakRSSChildEnv = "TPARAGEN_BENCH_CHILD"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(peakRSSChildEnv) != "" {
-		if err := Run(context.Background(), io.Discard, io.Discard, nil, "1.21"); err != nil {
+		if err := Run(context.Background(), io.Discard, io.Discard, nil, "1.21", false); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -138,7 +138,7 @@ func benchmarkRun(b *testing.B, spec benchcorpus.Spec) {
 
 		b.StartTimer()
 
-		if err := Run(context.Background(), io.Discard, io.Discard, nil, "1.21"); err != nil {
+		if err := Run(context.Background(), io.Discard, io.Discard, nil, "1.21", false); err != nil {
 			b.Fatal(err)
 		}
 
