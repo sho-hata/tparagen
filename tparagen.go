@@ -25,27 +25,28 @@ const (
 // minGoVersion is the Go language version the processed tests are written for
 // (e.g. "1.21"). It decides whether loop variables have to be copied before a
 // parallel subtest, which is needed before Go 1.22. When it is empty, the go
-// directive of the nearest go.mod is used.
+// directive of the go.mod nearest to each file is used.
 func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion string) error {
 	ignoreDirs := []string{defaultIgnoreDir}
 	if len(ignoreDirs) != 0 {
 		ignoreDirs = append(ignoreDirs, ignoreDirectories...)
 	}
 
+	// Reject an invalid version before looking at any file.
+	if minGoVersion != "" {
+		if _, err := needFixLoopVar(minGoVersion); err != nil {
+			return err
+		}
+	}
+
 	t := &tparagen{
-		in:         defaultTargetDir,
-		dest:       "",
-		outStream:  outStream,
-		errStream:  errStream,
-		ignoreDirs: ignoreDirs,
+		in:           defaultTargetDir,
+		dest:         "",
+		outStream:    outStream,
+		errStream:    errStream,
+		ignoreDirs:   ignoreDirs,
+		minGoVersion: minGoVersion,
 	}
-
-	needFix, err := t.resolveNeedFixLoopVar(minGoVersion)
-	if err != nil {
-		return err
-	}
-
-	t.needFixLoopVar = needFix
 
 	return t.run(ctx)
 }
@@ -54,7 +55,11 @@ type tparagen struct {
 	in, dest             string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
-	needFixLoopVar       bool
+
+	// minGoVersion overrides the go directive of every go.mod when set.
+	minGoVersion string
+	modules      moduleFinder
+	warnNoGoMod  sync.Once
 }
 
 func (t *tparagen) run(ctx context.Context) error {
@@ -94,7 +99,12 @@ func (t *tparagen) run(ctx context.Context) error {
 			return fmt.Errorf("cannot read %s. %w", path, err)
 		}
 
-		got, err := GenerateTParallel(path, src, t.needFixLoopVar)
+		needFix, err := t.needFixLoopVarIn(filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+
+		got, err := GenerateTParallel(path, src, needFix)
 		if err != nil {
 			return fmt.Errorf("error occurred in Process(). %w", err)
 		}
