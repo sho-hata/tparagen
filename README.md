@@ -27,6 +27,8 @@ If there is your application in production already, you must add a `T.Parallel()
 ## Demo
 ![demo](/doc/tparagen.gif)
 
+The demo is recorded with [vhs](https://github.com/charmbracelet/vhs): `vhs doc/tparagen.tape`.
+
 ## Description
 tparagen is cli tool for insert the `T.Parallel()` method from the testing package into all main/sub test in the specified packages.
 
