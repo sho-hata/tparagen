@@ -1,0 +1,33 @@
+Name: a deferred function literal counts
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	var wg sync.WaitGroup
+	defer func() {
+		wg.Wait()
+	}()
+
+	t.Run("1", func(t *testing.T) {
+		wg.Add(1)
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	var wg sync.WaitGroup
+	defer func() {
+		wg.Wait()
+	}()
+
+	t.Run("1", func(t *testing.T) {
+		wg.Add(1)
+	})
+}

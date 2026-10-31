@@ -1,0 +1,30 @@
+Name: ignore tparallel and paralleltest lint to main test once
+NeedFixLoopVar: true
+NoFinalNewline: input
+-- input.go --
+package t
+
+import "testing"
+
+//nolint:tparallel,paralleltest
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}
+-- golden.go --
+package t
+
+import "testing"
+
+//nolint:tparallel,paralleltest
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Parallel()
+	t.Run("hoge", nil)
+}

@@ -1,0 +1,36 @@
+Name: parent changes global state and restores it with defer
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+var cfg = "prod"
+
+func TestX(t *testing.T) {
+	old := cfg
+	cfg = "test"
+	defer func() { cfg = old }()
+	for _, n := range []string{"a", "b"} {
+		t.Run(n, func(t *testing.T) {
+			fmt.Println(cfg)
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+var cfg = "prod"
+
+func TestX(t *testing.T) {
+	old := cfg
+	cfg = "test"
+	defer func() { cfg = old }()
+	for _, n := range []string{"a", "b"} {
+		t.Run(n, func(t *testing.T) {
+			fmt.Println(cfg)
+		})
+	}
+}

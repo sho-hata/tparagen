@@ -203,6 +203,12 @@ go install github.com/sho-hata/tparagen/cmd/tparagen@latest
 ## Contribution
 Bug reports and pull requests are welcome on GitHub at https://github.com/sho-hata/tparagen. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the code of conduct.
 
+The rewrite tests are golden tests: each case is a [txtar](https://pkg.go.dev/golang.org/x/tools/txtar) file in `testdata/golden/<group>/` with the source in `input.go` and the wanted output in `golden.go`. Add a case by adding a file, and after changing the output on purpose, rewrite the golden files and review their diff:
+
+```
+$ go test -run 'TestProcess|TestGenerateTParallel' -update
+```
+
 ## License
 [MIT](https://github.com/sho-hata/tparagen/blob/main/LICENSE)
 

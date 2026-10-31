@@ -1,0 +1,49 @@
+Name: a defer in a nested function literal runs when that literal returns
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	srv := httptest.NewServer(h)
+
+	func() {
+		defer srv.Close()
+	}()
+
+	run := func(name string) {
+		conn := dial(srv.URL)
+		defer conn.Close()
+
+		t.Run(name, func(t *testing.T) {
+			use(conn)
+		})
+	}
+
+	run("1")
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(h)
+
+	func() {
+		defer srv.Close()
+	}()
+
+	run := func(name string) {
+		conn := dial(srv.URL)
+		defer conn.Close()
+
+		t.Run(name, func(t *testing.T) {
+			use(conn)
+		})
+	}
+
+	run("1")
+}

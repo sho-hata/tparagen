@@ -1,0 +1,26 @@
+Name: Parallel inside a switch case
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	switch os.Getenv("MODE") {
+	case "serial":
+	default:
+		t.Parallel()
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	switch os.Getenv("MODE") {
+	case "serial":
+	default:
+		t.Parallel()
+	}
+}

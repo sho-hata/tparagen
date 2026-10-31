@@ -1,0 +1,36 @@
+Name: err declared with a deferred value does not keep other subtests sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	f, err := os.CreateTemp("", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	t.Run("1", func(t *testing.T) {
+		got, err := strconv.Atoi("1")
+		fmt.Println(got, err)
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	f, err := os.CreateTemp("", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		got, err := strconv.Atoi("1")
+		fmt.Println(got, err)
+	})
+}

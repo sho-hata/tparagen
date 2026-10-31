@@ -1,0 +1,33 @@
+Name: a variable declared together with a deferred one counts
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			call(ctx, tc)
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			call(ctx, tc)
+		})
+	}
+}

@@ -1,0 +1,24 @@
+Name: missing t.Parallel in sub test function has t.Setenv
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestSubFunctionMissingParallelHasSetenv(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		t.Setenv("TEST", "test")
+		fmt.Println("1")
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestSubFunctionMissingParallelHasSetenv(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		t.Setenv("TEST", "test")
+		fmt.Println("1")
+	})
+}

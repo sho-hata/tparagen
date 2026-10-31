@@ -1,0 +1,37 @@
+Name: second one test run missing call to parallel
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInSecondOneTestMainTestHasParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(x *testing.T) {
+		x.Parallel()
+		fmt.Println("1")
+	})
+
+	t.Run("2", func(t *testing.T) {
+		fmt.Println("2")
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInSecondOneTestMainTestHasParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(x *testing.T) {
+		x.Parallel()
+		fmt.Println("1")
+	})
+
+	t.Run("2", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("2")
+	})
+}

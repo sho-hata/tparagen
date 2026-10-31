@@ -1,0 +1,29 @@
+Name: subtest using a deferred value stays sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	t.Run("1", func(t *testing.T) {
+		get(t, srv.URL)
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	t.Run("1", func(t *testing.T) {
+		get(t, srv.URL)
+	})
+}

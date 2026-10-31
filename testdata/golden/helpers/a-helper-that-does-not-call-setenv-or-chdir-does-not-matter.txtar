@@ -1,0 +1,33 @@
+Name: a helper that does not call Setenv or Chdir does not matter
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func check(t *testing.T, got int) {
+	t.Helper()
+	if got != 1 {
+		t.Fatal(got)
+	}
+}
+
+func TestX(t *testing.T) {
+	check(t, 1)
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func check(t *testing.T, got int) {
+	t.Helper()
+	if got != 1 {
+		t.Fatal(got)
+	}
+}
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	check(t, 1)
+}

@@ -1,0 +1,34 @@
+Name: a defer in a subtest affects only its own subtests
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("outer", func(t *testing.T) {
+		srv := httptest.NewServer(h)
+		defer srv.Close()
+
+		t.Run("inner", func(t *testing.T) {
+			get(t, srv.URL)
+		})
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	t.Run("outer", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(h)
+		defer srv.Close()
+
+		t.Run("inner", func(t *testing.T) {
+			get(t, srv.URL)
+		})
+	})
+}

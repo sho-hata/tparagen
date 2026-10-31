@@ -1,0 +1,29 @@
+Name: Setenv in a subtest: neither the parent nor that subtest, but the sibling, gets Parallel
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("X", "y")
+	})
+	t.Run("plain", func(t *testing.T) {
+		fmt.Println("1")
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("X", "y")
+	})
+	t.Run("plain", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+}

@@ -1,0 +1,43 @@
+Name: local variables are not global state
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	x := 1
+	x = 2
+	var m map[string]int
+	m["a"] = x
+	for i, tc := range tests {
+		tc.v = i
+	}
+	f := func(n int) (r int) {
+		n++
+		r = n
+		return
+	}
+	_ = f
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	x := 1
+	x = 2
+	var m map[string]int
+	m["a"] = x
+	for i, tc := range tests {
+		tc.v = i
+	}
+	f := func(n int) (r int) {
+		n++
+		r = n
+		return
+	}
+	_ = f
+}

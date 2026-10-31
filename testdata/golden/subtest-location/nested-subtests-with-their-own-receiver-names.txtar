@@ -1,0 +1,33 @@
+Name: nested subtests with their own receiver names
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("outer", func(st *testing.T) {
+		for _, tc := range []string{"a"} {
+			st.Run(tc, func(sst *testing.T) {
+				fmt.Println(tc)
+			})
+		}
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	t.Run("outer", func(st *testing.T) {
+		st.Parallel()
+		for _, tc := range []string{"a"} {
+			st.Run(tc, func(sst *testing.T) {
+				sst.Parallel()
+				fmt.Println(tc)
+			})
+		}
+	})
+}

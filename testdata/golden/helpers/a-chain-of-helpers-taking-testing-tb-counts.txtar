@@ -1,0 +1,38 @@
+Name: a chain of helpers taking testing.TB counts
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func mktmp(tb testing.TB) string {
+	dir := tb.TempDir()
+	chdir(tb, dir)
+	return dir
+}
+
+func chdir(tb testing.TB, dir string) {
+	tb.Chdir(dir)
+}
+
+func TestX(t *testing.T) {
+	mktmp(t)
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func mktmp(tb testing.TB) string {
+	dir := tb.TempDir()
+	chdir(tb, dir)
+	return dir
+}
+
+func chdir(tb testing.TB, dir string) {
+	tb.Chdir(dir)
+}
+
+func TestX(t *testing.T) {
+	mktmp(t)
+}

@@ -1,0 +1,22 @@
+Name: Parallel inside an if block
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	if !testing.Short() {
+		t.Parallel()
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	if !testing.Short() {
+		t.Parallel()
+	}
+}

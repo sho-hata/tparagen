@@ -1,0 +1,32 @@
+Name: build constraint without a Go version does not
+NeedFixLoopVar: false
+-- input.go --
+//go:build linux
+
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	for _, tc := range []string{"a"} {
+		t.Run(tc, func(t *testing.T) {
+			fmt.Println(tc)
+		})
+	}
+}
+-- golden.go --
+//go:build linux
+
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []string{"a"} {
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(tc)
+		})
+	}
+}

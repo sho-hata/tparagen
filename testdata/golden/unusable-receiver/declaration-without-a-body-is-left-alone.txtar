@@ -1,0 +1,14 @@
+Name: declaration without a body is left alone
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T)
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T)

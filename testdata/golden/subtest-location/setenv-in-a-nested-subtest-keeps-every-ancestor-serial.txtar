@@ -1,0 +1,33 @@
+Name: Setenv in a nested subtest keeps every ancestor serial
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("outer", func(t *testing.T) {
+		t.Run("inner", func(t *testing.T) {
+			t.Setenv("K", "V")
+		})
+		t.Run("sibling", func(t *testing.T) {
+			fmt.Println("sibling")
+		})
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("outer", func(t *testing.T) {
+		t.Run("inner", func(t *testing.T) {
+			t.Setenv("K", "V")
+		})
+		t.Run("sibling", func(t *testing.T) {
+			t.Parallel()
+			fmt.Println("sibling")
+		})
+	})
+}

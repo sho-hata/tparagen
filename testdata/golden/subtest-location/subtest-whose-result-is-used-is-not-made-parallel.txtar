@@ -1,0 +1,40 @@
+Name: subtest whose result is used is not made parallel
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	if !t.Run("setup", func(t *testing.T) {
+		fmt.Println("setup")
+	}) {
+		t.FailNow()
+	}
+	ok := t.Run("1", func(t *testing.T) {
+		t.Run("inner", func(t *testing.T) {
+			fmt.Println("inner")
+		})
+	})
+	_ = ok
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	if !t.Run("setup", func(t *testing.T) {
+		fmt.Println("setup")
+	}) {
+		t.FailNow()
+	}
+	ok := t.Run("1", func(t *testing.T) {
+		t.Run("inner", func(t *testing.T) {
+			t.Parallel()
+			fmt.Println("inner")
+		})
+	})
+	_ = ok
+}

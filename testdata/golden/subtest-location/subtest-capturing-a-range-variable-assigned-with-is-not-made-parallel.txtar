@@ -1,0 +1,29 @@
+Name: subtest capturing a range variable assigned with = is not made parallel
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	var tc string
+	for _, tc = range []string{"a", "b"} {
+		t.Run(tc, func(t *testing.T) {
+			fmt.Println(tc)
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	var tc string
+	for _, tc = range []string{"a", "b"} {
+		t.Run(tc, func(t *testing.T) {
+			fmt.Println(tc)
+		})
+	}
+}

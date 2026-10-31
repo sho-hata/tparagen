@@ -1,0 +1,38 @@
+Name: main & sub test function has t.Setenv with range statement
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestFunctionMainAndSubHasSetenvWithRangeTest(t *testing.T) {
+	t.Setenv("TEST", "test")
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(x *testing.T) {
+			x.Setenv("TEST", "test")
+			fmt.Println(tc.name)
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestFunctionMainAndSubHasSetenvWithRangeTest(t *testing.T) {
+	t.Setenv("TEST", "test")
+
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(x *testing.T) {
+			x.Setenv("TEST", "test")
+			fmt.Println(tc.name)
+		})
+	}
+}

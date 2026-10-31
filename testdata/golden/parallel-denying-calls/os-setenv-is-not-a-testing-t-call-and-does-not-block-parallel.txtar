@@ -1,0 +1,19 @@
+Name: os.Setenv is not a *testing.T call and does not block Parallel
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	os.Setenv("X", "y")
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	os.Setenv("X", "y")
+}

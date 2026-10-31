@@ -1,0 +1,31 @@
+Name: Test followed by an underscore, a digit or an upper-case letter is a test
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func Test_x(t *testing.T) {
+}
+
+func Test1(t *testing.T) {
+}
+
+func TestÉ(t *testing.T) {
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func Test_x(t *testing.T) {
+	t.Parallel()
+}
+
+func Test1(t *testing.T) {
+	t.Parallel()
+}
+
+func TestÉ(t *testing.T) {
+	t.Parallel()
+}

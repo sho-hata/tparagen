@@ -1,0 +1,23 @@
+Name: blank receiver in a subtest: only the parent gets Parallel
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("1", func(_ *testing.T) {
+		fmt.Println("1")
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	t.Run("1", func(_ *testing.T) {
+		fmt.Println("1")
+	})
+}

@@ -1,0 +1,18 @@
+Name: unnamed parameter does not panic and is left alone
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(*testing.T) {
+	fmt.Println("x")
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(*testing.T) {
+	fmt.Println("x")
+}
