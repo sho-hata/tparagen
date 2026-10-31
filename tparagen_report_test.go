@@ -58,6 +58,8 @@ func TestDone(t *testing.T) {
 			t.Parallel()
 
 			dir := t.TempDir()
+			writeFiles(t, dir, map[string]string{"go.mod": testGoMod})
+
 			for name, src := range files {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
 					t.Fatal(err)
@@ -67,7 +69,8 @@ func TestDone(t *testing.T) {
 			var out bytes.Buffer
 
 			r := &tparagen{
-				in:         dir,
+				dir:        dir,
+				patterns:   []string{defaultPattern},
 				outStream:  &out,
 				errStream:  io.Discard,
 				ignoreDirs: []string{defaultIgnoreDir},
@@ -88,13 +91,15 @@ func TestRunReportNoChanges(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"go.mod": testGoMod})
+
 	if err := os.WriteFile(filepath.Join(dir, "c_test.go"), []byte("package t\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	var out bytes.Buffer
 
-	r := &tparagen{in: dir, outStream: &out, errStream: io.Discard, ignoreDirs: []string{defaultIgnoreDir}}
+	r := &tparagen{dir: dir, patterns: []string{defaultPattern}, outStream: &out, errStream: io.Discard, ignoreDirs: []string{defaultIgnoreDir}}
 	if err := r.run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +114,8 @@ func TestRunReportCountsReformattedFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"go.mod": testGoMod})
+
 	src := "package t\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n    t.Parallel()\n}\n"
 
 	if err := os.WriteFile(filepath.Join(dir, "f_test.go"), []byte(src), 0o644); err != nil {
@@ -117,7 +124,7 @@ func TestRunReportCountsReformattedFiles(t *testing.T) {
 
 	var out bytes.Buffer
 
-	r := &tparagen{in: dir, outStream: &out, errStream: io.Discard, ignoreDirs: []string{defaultIgnoreDir}, verbose: true}
+	r := &tparagen{dir: dir, patterns: []string{defaultPattern}, outStream: &out, errStream: io.Discard, ignoreDirs: []string{defaultIgnoreDir}, verbose: true}
 	if err := r.run(context.Background()); err != nil {
 		t.Fatal(err)
 	}

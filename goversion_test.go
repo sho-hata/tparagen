@@ -135,7 +135,7 @@ func TestNeedFixLoopVarIn(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			tp := &tparagen{in: root, errStream: io.Discard, minGoVersion: tt.minGoVersion}
+			tp := &tparagen{dir: root, errStream: io.Discard, minGoVersion: tt.minGoVersion}
 
 			got, err := tp.needFixLoopVarIn(tt.dir)
 			if (err != nil) != tt.wantErr {

@@ -3,6 +3,7 @@ package tparagen
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/parser"
@@ -10,21 +11,53 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
 
-	"github.com/saracen/walker"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
-	defaultTargetDir = "./"
+	defaultPattern   = "./..."
 	defaultIgnoreDir = "testdata"
 )
 
-// Run is entry point.
+// Options configures RunWithOptions.
+type Options struct {
+	// Patterns are the packages to process, in the form the go command
+	// accepts (e.g. "./...", "./foo/...", "example.com/m/bar"). When it is
+	// empty, every package in and below the current directory ("./...") is
+	// processed.
+	Patterns []string
+
+	// IgnoreDirs are directory names whose files are left alone, in addition
+	// to testdata.
+	IgnoreDirs []string
+
+	// MinGoVersion is the Go language version the processed tests are written
+	// for (e.g. "1.21"). It decides whether loop variables have to be copied
+	// before a parallel subtest, which is needed before Go 1.22. When it is
+	// empty, the go directive of the go.mod nearest to each file is used.
+	MinGoVersion string
+
+	// BuildTags are the build tags the packages are resolved with, like the
+	// -tags flag of the go command. Test files excluded by build constraints
+	// are processed anyway when their package is matched, but a directory
+	// whose files all need a tag (e.g. //go:build e2e) is matched only when
+	// the tag is given.
+	BuildTags []string
+
+	// Verbose makes the report list every file that was changed or has tests
+	// left sequential, in addition to the summary.
+	Verbose bool
+}
+
+// Run is entry point. It processes every package in and below the current
+// directory ("./..."); use RunWithOptions to choose the packages.
 //
 // minGoVersion is the Go language version the processed tests are written for
 // (e.g. "1.21"). It decides whether loop variables have to be copied before a
@@ -34,33 +67,53 @@ const (
 // A summary of the changes is written to outStream; with verbose, also one
 // line for every file that was changed or has tests left sequential.
 func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion string, verbose bool) error {
+	return RunWithOptions(ctx, outStream, errStream, Options{
+		IgnoreDirs:   ignoreDirectories,
+		MinGoVersion: minGoVersion,
+		Verbose:      verbose,
+	})
+}
+
+// RunWithOptions processes the packages selected by opts.
+func RunWithOptions(ctx context.Context, outStream, errStream io.Writer, opts Options) error {
 	ignoreDirs := []string{defaultIgnoreDir}
-	if len(ignoreDirs) != 0 {
-		ignoreDirs = append(ignoreDirs, ignoreDirectories...)
+	for _, dir := range opts.IgnoreDirs {
+		if dir != "" {
+			ignoreDirs = append(ignoreDirs, dir)
+		}
+	}
+
+	patterns := opts.Patterns
+	if len(patterns) == 0 {
+		patterns = []string{defaultPattern}
 	}
 
 	// Reject an invalid version before looking at any file.
-	if minGoVersion != "" {
-		if _, err := needFixLoopVar(minGoVersion); err != nil {
+	if opts.MinGoVersion != "" {
+		if _, err := needFixLoopVar(opts.MinGoVersion); err != nil {
 			return err
 		}
 	}
 
 	t := &tparagen{
-		in:           defaultTargetDir,
-		dest:         "",
+		patterns:     patterns,
+		buildTags:    slices.DeleteFunc(slices.Clone(opts.BuildTags), func(tag string) bool { return tag == "" }),
 		outStream:    outStream,
 		errStream:    errStream,
 		ignoreDirs:   ignoreDirs,
-		minGoVersion: minGoVersion,
-		verbose:      verbose,
+		minGoVersion: opts.MinGoVersion,
+		verbose:      opts.Verbose,
 	}
 
 	return t.run(ctx)
 }
 
 type tparagen struct {
-	in, dest             string
+	// dir is the directory the patterns are resolved in; the current
+	// directory when empty.
+	dir                  string
+	patterns             []string
+	buildTags            []string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
 	verbose              bool
@@ -74,8 +127,7 @@ type tparagen struct {
 func (t *tparagen) run(ctx context.Context) error {
 	// The run is read-only until every file has been processed successfully:
 	// files are written only at the end, so a failure half-way leaves every
-	// original untouched. Creating files inside the directories being walked
-	// would also disturb the concurrent directory listing.
+	// original untouched.
 	testFiles, helpers, err := t.scan(ctx)
 	if err != nil {
 		return err
@@ -117,73 +169,280 @@ type testFile struct {
 	path string
 }
 
-// scan walks t.in and returns the _test.go files to process. It also indexes
-// the helper functions, in any .go file of the tree that imports testing,
-// that call t.Setenv or t.Chdir on the testing value they are given.
+// scan returns the _test.go files of the packages matched by t.patterns. It
+// also indexes the helper functions, in any .go file of those packages or of
+// the vendor directories of their modules that imports testing, that call
+// t.Setenv or t.Chdir on the testing value they are given.
 func (t *tparagen) scan(ctx context.Context) ([]testFile, *helperIndex, error) {
+	dirs, err := t.packageDirs(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Vendored packages are not matched by ./..., but tests can call their
+	// helpers.
+	vendorDirs, err := t.vendorDirs(dirs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	type scanDir struct {
+		path string
+		// helpersOnly is set for a vendored package: its test files are not
+		// ours to rewrite.
+		helpersOnly bool
+	}
+
+	all := make([]scanDir, 0, len(dirs)+len(vendorDirs))
+	for _, dir := range dirs {
+		all = append(all, scanDir{path: dir})
+	}
+
+	for _, dir := range vendorDirs {
+		all = append(all, scanDir{path: dir, helpersOnly: true})
+	}
+
 	var (
 		mu        sync.Mutex
 		testFiles []testFile
 		builder   helperIndexBuilder
 	)
 
-	// walker.Walk() may execute concurrently.
-	err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
-		// Abort the scan early on interruption (SIGINT/SIGTERM); nothing has
-		// been written at this point.
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(runtime.GOMAXPROCS(0))
 
-		if info.IsDir() && t.skipDir(path) {
-			return filepath.SkipDir
-		}
+	for _, sd := range all {
+		dir := sd.path
 
-		if info.IsDir() || filepath.Ext(path) != ".go" {
+		g.Go(func() error {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return fmt.Errorf("cannot read %s. %w", dir, err)
+			}
+
+			importPath := t.importPath(dir)
+
+			for _, e := range entries {
+				// Abort the scan early on interruption (SIGINT/SIGTERM);
+				// nothing has been written at this point.
+				if err := gctx.Err(); err != nil {
+					return err
+				}
+
+				if !e.Type().IsRegular() || filepath.Ext(e.Name()) != ".go" {
+					continue
+				}
+
+				path := filepath.Join(dir, e.Name())
+
+				src, err := os.ReadFile(path)
+				if err != nil {
+					return fmt.Errorf("cannot read %s. %w", path, err)
+				}
+
+				if strings.HasSuffix(e.Name(), "_test.go") {
+					if sd.helpersOnly {
+						continue
+					}
+
+					mu.Lock()
+					testFiles = append(testFiles, testFile{path: path})
+					mu.Unlock()
+				}
+
+				// Only a file importing testing can declare a helper taking a
+				// *testing.T, and most test files declare no function other
+				// than their tests: parsing them only to find that out would
+				// double the parsing work of the run.
+				if !bytes.Contains(src, []byte(`"testing"`)) || !mayDeclareHelper(src) {
+					continue
+				}
+
+				f, err := parser.ParseFile(token.NewFileSet(), path, src, parser.SkipObjectResolution)
+				if err != nil {
+					// A test file that does not parse is reported when it is
+					// processed; any other file is not ours to complain about.
+					continue
+				}
+
+				builder.addFile(path, f, importPath)
+			}
+
 			return nil
-		}
+		})
+	}
 
-		isTest := strings.HasSuffix(filepath.Base(path), "_test.go")
-
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("cannot read %s. %w", path, err)
-		}
-
-		if isTest {
-			mu.Lock()
-			testFiles = append(testFiles, testFile{path: path})
-			mu.Unlock()
-		}
-
-		// Only a file importing testing can declare a helper taking a
-		// *testing.T, and most test files declare no function other than
-		// their tests: parsing them only to find that out would double the
-		// parsing work of the run.
-		if !bytes.Contains(src, []byte(`"testing"`)) || !mayDeclareHelper(src) {
-			return nil
-		}
-
-		f, err := parser.ParseFile(token.NewFileSet(), path, src, parser.SkipObjectResolution)
-		if err != nil {
-			// A test file that does not parse is reported when it is
-			// processed; any other file is not ours to complain about.
-			return nil
-		}
-
-		builder.addFile(path, f, t.importPath(filepath.Dir(path)))
-
-		return nil
-	})
-	if err != nil {
+	if err := g.Wait(); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, nil, fmt.Errorf("interrupted before applying changes: %w", err)
 		}
 
-		return nil, nil, fmt.Errorf("error occurred in walker.Walk(). %w", err)
+		return nil, nil, err
 	}
 
 	return testFiles, builder.build(), nil
+}
+
+// listedPackage is the part of the `go list -json` output that packageDirs
+// uses.
+type listedPackage struct {
+	Dir   string
+	Error *struct {
+		Err string
+	}
+}
+
+// packageDirs resolves t.patterns with `go list`, like `go test` does, and
+// returns the directories of the matched packages. Only the directories that
+// the patterns select are read: testdata, vendor and directories starting
+// with "." or "_" are skipped, and "./..." stops at nested modules.
+//
+// The packages are only located (-find), not loaded with their tests: go list
+// cannot skip resolving imports when it lists tests, which makes it much
+// slower. Every .go file of a package directory is read instead, so test
+// files excluded by build constraints (e.g. //go:build integration) are
+// processed as well, whatever tags they need. go list is run directly rather
+// than through go/packages, which would start another go command to query
+// the Go version and decode much more of the output.
+func (t *tparagen) packageDirs(ctx context.Context) ([]string, error) {
+	args := []string{"list", "-e", "-find", "-json=Dir,Error"}
+	if len(t.buildTags) > 0 {
+		args = append(args, "-tags="+strings.Join(t.buildTags, ","))
+	}
+
+	args = append(args, "--")
+	args = append(args, t.patterns...)
+
+	var stderr bytes.Buffer
+
+	// With Dir set and Env nil, PWD is set to Dir, so go list reports the
+	// directories under the path it was given, not under a resolved symlink.
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Dir = t.dir
+	cmd.Stderr = &stderr
+
+	out, err := cmd.Output()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("interrupted before applying changes: %w", ctxErr)
+		}
+
+		return nil, fmt.Errorf("cannot list packages. %w\n%s", err, bytes.TrimSpace(stderr.Bytes()))
+	}
+
+	baseDir, err := filepath.Abs(t.dir)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		dirs    []string
+		seen    = map[string]bool{}
+		listErr []error
+		matched bool
+	)
+
+	for dec := json.NewDecoder(bytes.NewReader(out)); ; {
+		var pkg listedPackage
+		if err := dec.Decode(&pkg); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return nil, fmt.Errorf("cannot parse the output of go list. %w", err)
+		}
+
+		matched = true
+
+		// A pattern that matches nothing (a missing directory, a package
+		// outside the main modules, ...) is reported as a package without a
+		// directory. Errors of packages that do have one, such as a directory
+		// holding only test files, do not keep us from rewriting their tests.
+		if pkg.Dir == "" {
+			if pkg.Error != nil {
+				listErr = append(listErr, errors.New(pkg.Error.Err))
+			}
+
+			continue
+		}
+
+		if seen[pkg.Dir] || t.ignored(baseDir, pkg.Dir) {
+			continue
+		}
+
+		seen[pkg.Dir] = true
+		dirs = append(dirs, pkg.Dir)
+	}
+
+	if len(listErr) > 0 {
+		return nil, fmt.Errorf("cannot list packages. %w", errors.Join(listErr...))
+	}
+
+	if !matched {
+		return nil, fmt.Errorf("no packages matched %s", strings.Join(t.patterns, " "))
+	}
+
+	return dirs, nil
+}
+
+// vendorDirs returns the package directories below the vendor directories of
+// the modules that contain dirs.
+func (t *tparagen) vendorDirs(dirs []string) ([]string, error) {
+	var (
+		vendorDirs []string
+		seen       = map[string]bool{}
+	)
+
+	for _, dir := range dirs {
+		mod, err := t.modules.find(dir)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read go.mod. %w", err)
+		}
+
+		if mod == nil || seen[mod.dir] {
+			continue
+		}
+
+		seen[mod.dir] = true
+
+		root := filepath.Join(mod.dir, "vendor")
+
+		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if errors.Is(err, fs.ErrNotExist) && path == root {
+				return filepath.SkipDir
+			}
+
+			if err != nil {
+				return err
+			}
+
+			if d.IsDir() {
+				vendorDirs = append(vendorDirs, path)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("cannot read %s. %w", root, err)
+		}
+	}
+
+	return vendorDirs, nil
+}
+
+// ignored reports whether dir is, or is in, a directory named by
+// t.ignoreDirs, below baseDir (or anywhere in dir when it is outside baseDir).
+func (t *tparagen) ignored(baseDir, dir string) bool {
+	rel, err := filepath.Rel(baseDir, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		rel = dir
+	}
+
+	for name := range strings.SplitSeq(rel, string(filepath.Separator)) {
+		if name != "" && slices.Contains(t.ignoreDirs, name) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // importPath returns the import path of the package in dir, or "" if dir is
@@ -483,14 +742,4 @@ func applyChanges(changes *sync.Map) error {
 	}
 
 	return nil
-}
-
-func (t *tparagen) skipDir(p string) bool {
-	for _, dir := range t.ignoreDirs {
-		if filepath.Base(p) == dir {
-			return true
-		}
-	}
-
-	return false
 }
