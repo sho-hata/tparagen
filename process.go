@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -34,18 +35,42 @@ const (
 // - A byte slice containing the modified source code.
 // - An error if any issues occur during parsing or formatting.
 func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte, error) {
-	return generateTParallel(filename, src, needFixLoopVar, nil)
+	got, _, err := generateTParallel(filename, src, needFixLoopVar, nil)
+
+	return got, err
+}
+
+// fileStats counts what generateTParallel did to one file.
+type fileStats struct {
+	// parallel is the number of t.Parallel() calls inserted.
+	parallel int
+	// loopVarCopies is the number of `tc := tc` copies inserted.
+	loopVarCopies int
+	// sequential is the number of tests and subtests that do not call
+	// t.Parallel() and were left that way because it is not safe.
+	sequential int
+	// rewritten is set when the file will be written. gofmt alone can
+	// rewrite a file in which nothing was added.
+	rewritten bool
+}
+
+func (s *fileStats) add(o fileStats) {
+	s.parallel += o.parallel
+	s.loopVarCopies += o.loopVarCopies
+	s.sequential += o.sequential
 }
 
 // generateTParallel is GenerateTParallel with the helpers known from other
-// files. When helpers is nil, only the helpers declared in the file itself are
-// known.
-func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers *helperIndex) ([]byte, error) {
+// files, that also reports what it did. When helpers is nil, only the helpers
+// declared in the file itself are known.
+func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers *helperIndex) ([]byte, fileStats, error) {
+	var stats fileStats
+
 	fs := token.NewFileSet()
 
 	f, err := parser.ParseFile(fs, filename, src, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("cannot parse file. %w", err)
+		return nil, stats, fmt.Errorf("cannot parse file. %w", err)
 	}
 
 	if helpers == nil {
@@ -56,7 +81,7 @@ func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers
 	}
 
 	if !isTparagenTargetFile(f) {
-		return src, nil
+		return src, stats, nil
 	}
 
 	// A `//go:build go1.N` line sets the language version of this file, so
@@ -91,6 +116,7 @@ func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers
 			imports: imports,
 			pkg:     pkg,
 			helpers: helpers,
+			stats:   &stats,
 		}
 		scope.localHelpers = localDenyingClosures(funcDecl.Body, scope)
 
@@ -102,10 +128,10 @@ func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers
 	// gofmt
 	var fmtedBuf bytes.Buffer
 	if err := format.Node(&fmtedBuf, fs, f); err != nil {
-		return nil, fmt.Errorf("gofmt error occurred. %w", err)
+		return nil, stats, fmt.Errorf("gofmt error occurred. %w", err)
 	}
 
-	return fmtedBuf.Bytes(), nil
+	return fmtedBuf.Bytes(), stats, nil
 }
 
 // insertTParallel inserts Parallel() into the test whose body is body and whose
@@ -117,9 +143,21 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 	// Insert Parallel() unless the test already calls it, or the test (or
 	// any of its subtests, at any depth) calls t.Setenv/t.Chdir etc. or
 	// changes global state: see deniesParallel.
-	insert := mayParallel && !callsParallel(body, testVar) && !deniesParallel(body, scope)
+	alreadyParallel := callsParallel(body, testVar)
+	insert := mayParallel && !alreadyParallel && !deniesParallel(body, scope)
+
+	// Parallel subtests run after body returns, so they would see global
+	// state that body changed already restored, e.g. by a deferred call.
+	subtestsMayParallel := !changesGlobalStateOutsideSubtests(body, testVar, scope)
 
 	ast.PreorderStack(body, nil, func(n ast.Node, stack []ast.Node) bool {
+		// A t.Run inside a closure such as a helper can run several times,
+		// with captured state changed in between, so it is left alone.
+		// Subtest callbacks are handled at their t.Run call below.
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+
 		if !hasRunMethod(n, testVar) {
 			return true
 		}
@@ -136,13 +174,14 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 
 		// A parallel subtest's t.Run returns before the subtest finishes, so
 		// one whose result is used (`if !t.Run(...)`) must stay sequential.
-		// So must one that captures a variable its enclosing loop reassigns:
-		// every parallel subtest would see the value after the loop ends.
+		// So must one that captures a variable the test reassigns: every
+		// parallel subtest would see the last value.
 		_, resultDiscarded := stack[len(stack)-1].(*ast.ExprStmt)
-		mayParallel := resultDiscarded && !capturesReassignedLoopVar(stack, fun)
+		mayParallel := subtestsMayParallel && resultDiscarded && !assignsCapturedVar(body, fun, nil) &&
+			!usesDeferredValue(body, fun, scope)
 
 		if insertTParallel(fun.Body, innerTestVar, scope, needFixLoopVar, mayParallel) && needFixLoopVar {
-			copyLoopVars(stack, fun)
+			scope.stats.loopVarCopies += copyLoopVars(stack, fun)
 		}
 
 		return false
@@ -151,6 +190,9 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 	if insert {
 		tpStmt := buildTParallelStmt(body.Lbrace, testVar)
 		body.List = append([]ast.Stmt{tpStmt}, body.List...)
+		scope.stats.parallel++
+	} else if !alreadyParallel {
+		scope.stats.sequential++
 	}
 
 	return insert
@@ -180,61 +222,75 @@ func callsParallel(body *ast.BlockStmt, testVar string) bool {
 	return found
 }
 
-// capturesReassignedLoopVar reports whether fun references a variable that an
-// enclosing loop in stack assigns, other than the variables the loop declares
-// (which are per-iteration from Go 1.22, and copied by copyLoopVars before).
-// For example i in `for i < 3 { ...; i++ }`, or tc in `for _, tc = range xs`.
-// Assignments inside fun itself are not counted.
-func capturesReassignedLoopVar(stack []ast.Node, fun *ast.FuncLit) bool {
-	for _, n := range stack {
-		var declared []string
+// assignsCapturedVar reports whether node assigns a variable that fun
+// references, other than those in except. Examples are want in `want = 2`
+// between two subtests, i in `for i < 3 { ...; i++ }` and tc in
+// `for _, tc = range xs`: a parallel subtest runs after its parent returns and
+// would see the last value. The post statement of a loop that declares the
+// variable (the i++ in `for i := 0; ...; i++`) does not count: from Go 1.22
+// every iteration gets its own i, and copyLoopVars copies it before.
+// Assignments inside fun itself do not count.
+func assignsCapturedVar(node ast.Node, fun *ast.FuncLit, except []string) bool {
+	var captured bool
 
-		switch loop := n.(type) {
-		case *ast.RangeStmt:
-			declared = rangeLoopVarNames(loop)
-
-			if loop.Tok == token.ASSIGN {
-				for _, expr := range []ast.Expr{loop.Key, loop.Value} {
-					if id, ok := expr.(*ast.Ident); ok && identReferenced(fun.Body, id.Name) {
-						return true
-					}
-				}
+	check := func(exprs ...ast.Expr) {
+		for _, expr := range exprs {
+			id, ok := expr.(*ast.Ident)
+			if ok && !slices.Contains(except, id.Name) && identReferenced(fun.Body, id.Name) {
+				captured = true
 			}
-		case *ast.ForStmt:
-			declared = forLoopVarNames(loop)
-		default:
-			continue
+		}
+	}
+
+	ast.Inspect(node, func(m ast.Node) bool {
+		if captured || m == fun {
+			return false
 		}
 
-		var captured bool
-
-		ast.Inspect(n, func(m ast.Node) bool {
-			if captured || m == fun {
-				return false
+		switch s := m.(type) {
+		case *ast.AssignStmt:
+			if s.Tok != token.DEFINE {
+				check(s.Lhs...)
+			}
+		case *ast.IncDecStmt:
+			check(s.X)
+		case *ast.RangeStmt:
+			if s.Tok == token.ASSIGN {
+				check(s.Key, s.Value)
+			}
+		case *ast.ForStmt:
+			if s.Post != nil {
+				captured = assignsCapturedVar(s.Post, fun, append(slices.Clone(except), forLoopVarNames(s)...))
 			}
 
-			var lhs []ast.Expr
-
-			switch s := m.(type) {
-			case *ast.AssignStmt:
-				if s.Tok != token.DEFINE {
-					lhs = s.Lhs
-				}
-			case *ast.IncDecStmt:
-				lhs = []ast.Expr{s.X}
-			}
-
-			for _, expr := range lhs {
-				id, ok := expr.(*ast.Ident)
-				if ok && !slices.Contains(declared, id.Name) && identReferenced(fun.Body, id.Name) {
-					captured = true
+			for _, part := range []ast.Node{s.Init, s.Body} {
+				if !captured && part != nil {
+					captured = assignsCapturedVar(part, fun, except)
 				}
 			}
 
-			return !captured
-		})
+			return false
+		}
 
-		if captured {
+		return !captured
+	})
+
+	return captured
+}
+
+// usesDeferredValue reports whether the subtest fun uses a variable that the
+// function starting it hands to a defer statement, such as srv in
+// `defer srv.Close()`. A parallel subtest only starts running after that
+// function has returned, i.e. after its deferred calls have closed the server,
+// canceled the context or waited for the WaitGroup. When the deferred call is
+// a plain function variable, the variables declared together with it count
+// too: ctx in `ctx, cancel := context.WithCancel(...); defer cancel()`.
+//
+// The function starting the subtest is the test whose body is body: subtests
+// started inside other function literals are left alone (see insertTParallel).
+func usesDeferredValue(body *ast.BlockStmt, fun *ast.FuncLit, scope *testScope) bool {
+	for name := range deferredVars(body, nil) {
+		if !scope.tIdents[name] && identReferenced(fun.Body, name) {
 			return true
 		}
 	}
@@ -242,18 +298,111 @@ func capturesReassignedLoopVar(stack []ast.Node, fun *ast.FuncLit) bool {
 	return false
 }
 
+// deferredVars returns the variables of the function with body body and
+// parameters params that its defer statements refer to, together with the
+// variables declared in the same statement as each of them. Function literals
+// inside body are not searched: their defer statements run when they return.
+func deferredVars(body *ast.BlockStmt, params *ast.FieldList) map[string]bool {
+	// The names declared by each declaring statement, by name.
+	declaredWith := map[string][]string{}
+
+	declare := func(names []string) {
+		for _, name := range names {
+			if name != "_" {
+				declaredWith[name] = append(declaredWith[name], names...)
+			}
+		}
+	}
+
+	identNames := func(exprs ...ast.Expr) []string {
+		var names []string
+
+		for _, expr := range exprs {
+			if id, ok := expr.(*ast.Ident); ok {
+				names = append(names, id.Name)
+			}
+		}
+
+		return names
+	}
+
+	if params != nil {
+		for _, field := range params.List {
+			for _, name := range field.Names {
+				declare([]string{name.Name})
+			}
+		}
+	}
+
+	var defers []*ast.DeferStmt
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.DeferStmt:
+			defers = append(defers, n)
+
+			return false
+		case *ast.AssignStmt:
+			if n.Tok == token.DEFINE {
+				declare(identNames(n.Lhs...))
+			}
+		case *ast.RangeStmt:
+			if n.Tok == token.DEFINE {
+				declare(identNames(n.Key, n.Value))
+			}
+		case *ast.ValueSpec:
+			names := make([]string, 0, len(n.Names))
+			for _, name := range n.Names {
+				names = append(names, name.Name)
+			}
+
+			declare(names)
+		}
+
+		return true
+	})
+
+	vars := map[string]bool{}
+
+	for _, d := range defers {
+		// `defer cancel()`: cancel stands for what it was created with, so
+		// ctx in `ctx, cancel := ...` counts too. Otherwise only the names in
+		// the call count: in `f, err := ...; defer os.Remove(f.Name())`, err
+		// does not.
+		if id, ok := d.Call.Fun.(*ast.Ident); ok {
+			for _, name := range declaredWith[id.Name] {
+				vars[name] = true
+			}
+		}
+
+		ast.Inspect(d.Call, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && len(declaredWith[id.Name]) > 0 {
+				vars[id.Name] = true
+			}
+
+			return true
+		})
+	}
+
+	return vars
+}
+
 // copyLoopVars copies, at the top of each enclosing loop in stack, the loop
 // variables that the now parallel subtest fun captures: `tc := tc`. Before Go
 // 1.22 every iteration shares the same loop variable
-// (https://go.dev/doc/go1.22#language).
-func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) {
-	for _, n := range stack {
+// (https://go.dev/doc/go1.22#language). It returns the number of copies.
+func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) int {
+	var n int
+
+	for _, node := range stack {
 		var (
 			loopVars []string
 			body     *ast.BlockStmt
 		)
 
-		switch loop := n.(type) {
+		switch loop := node.(type) {
 		case *ast.RangeStmt:
 			loopVars, body = rangeLoopVarNames(loop), loop.Body
 		case *ast.ForStmt:
@@ -273,13 +422,25 @@ func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) {
 		}
 
 		body.List = append(copies, body.List...)
+		n += len(copies)
 	}
+
+	return n
 }
 
-// Checks if the function has the param type *testing.T; if it does, then the
+// Checks if the function is one that `go test` runs as a test: a top-level
+// function named TestXxx with a single *testing.T parameter. If it is, the
 // parameter name is returned, too.
 func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
-	if !strings.HasPrefix(funcDecl.Name.Name, testPrefix) {
+	if !isTestName(funcDecl.Name.Name) {
+		return false, ""
+	}
+
+	// `go test` never runs methods. A method such as `func (s) TestX(t
+	// *testing.T)` is run by a suite runner through reflection, which may
+	// set up and check process-wide state around every test (swap a global
+	// value, check for leaked goroutines), so it must not be made parallel.
+	if funcDecl.Recv != nil {
 		return false, ""
 	}
 
@@ -321,6 +482,24 @@ func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
 	}
 
 	return s.Name == testMethodPackageType, param.Names[0].Name
+}
+
+// isTestName reports whether name is the name of a test function as `go test`
+// sees it: Test, or Test followed by a character that is not a lower-case
+// letter. Testable or Testing are not tests.
+func isTestName(name string) bool {
+	rest, ok := strings.CutPrefix(name, testPrefix)
+	if !ok {
+		return false
+	}
+
+	if rest == "" {
+		return true
+	}
+
+	r, _ := utf8.DecodeRuneInString(rest)
+
+	return !unicode.IsLower(r)
 }
 
 func exprCallHasMethod(node ast.Node, receiverName, methodName string) bool {
@@ -385,6 +564,8 @@ type testScope struct {
 	// test function, such as `doTest := func(tb testing.TB) {...}`, whose
 	// body denies Parallel(). Calling one denies it too.
 	localHelpers map[string]bool
+	// stats collects what was done to the file the function is in.
+	stats *fileStats
 }
 
 // localDenyingClosures returns the names of the variables declared in body
@@ -577,6 +758,25 @@ func (s *testScope) changesGlobalState(n ast.Node) bool {
 	}
 
 	return false
+}
+
+// changesGlobalStateOutsideSubtests reports whether the test whose body is
+// body, and whose *testing.T is named testVar, changes global state itself,
+// outside the subtests it starts.
+func changesGlobalStateOutsideSubtests(body *ast.BlockStmt, testVar string, scope *testScope) bool {
+	var changes bool
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		if changes || hasRunMethod(n, testVar) {
+			return false
+		}
+
+		changes = scope.changesGlobalState(n)
+
+		return !changes
+	})
+
+	return changes
 }
 
 // rootIdent returns the variable that expr, the left-hand side of an
