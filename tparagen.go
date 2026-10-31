@@ -3,6 +3,7 @@ package tparagen
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/parser"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -17,7 +19,6 @@ import (
 	"sync"
 
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/tools/go/packages"
 )
 
 const (
@@ -282,38 +283,51 @@ func (t *tparagen) scan(ctx context.Context) ([]testFile, *helperIndex, error) {
 	return testFiles, builder.build(), nil
 }
 
-// packageDirs resolves t.patterns with go/packages, like `go test` does, and
+// listedPackage is the part of the `go list -json` output that packageDirs
+// uses.
+type listedPackage struct {
+	Dir   string
+	Error *struct {
+		Err string
+	}
+}
+
+// packageDirs resolves t.patterns with `go list`, like `go test` does, and
 // returns the directories of the matched packages. Only the directories that
 // the patterns select are read: testdata, vendor and directories starting
 // with "." or "_" are skipped, and "./..." stops at nested modules.
 //
-// The packages are only located, not loaded with their tests: go list cannot
-// skip resolving imports (-find) when it lists tests, which makes it much
+// The packages are only located (-find), not loaded with their tests: go list
+// cannot skip resolving imports when it lists tests, which makes it much
 // slower. Every .go file of a package directory is read instead, so test
 // files excluded by build constraints (e.g. //go:build integration) are
-// processed as well, whatever tags they need.
+// processed as well, whatever tags they need. go list is run directly rather
+// than through go/packages, which would start another go command to query
+// the Go version and decode much more of the output.
 func (t *tparagen) packageDirs(ctx context.Context) ([]string, error) {
-	cfg := &packages.Config{
-		Context: ctx,
-		Mode:    packages.NeedName | packages.NeedFiles,
-		Dir:     t.dir,
-	}
-
+	args := []string{"list", "-e", "-find", "-json=Dir,Error"}
 	if len(t.buildTags) > 0 {
-		cfg.BuildFlags = []string{"-tags=" + strings.Join(t.buildTags, ",")}
+		args = append(args, "-tags="+strings.Join(t.buildTags, ","))
 	}
 
-	pkgs, err := packages.Load(cfg, t.patterns...)
+	args = append(args, "--")
+	args = append(args, t.patterns...)
+
+	var stderr bytes.Buffer
+
+	// With Dir set and Env nil, PWD is set to Dir, so go list reports the
+	// directories under the path it was given, not under a resolved symlink.
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Dir = t.dir
+	cmd.Stderr = &stderr
+
+	out, err := cmd.Output()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("interrupted before applying changes: %w", ctxErr)
 		}
 
-		return nil, fmt.Errorf("cannot load packages. %w", err)
-	}
-
-	if len(pkgs) == 0 {
-		return nil, fmt.Errorf("no packages matched %s", strings.Join(t.patterns, " "))
+		return nil, fmt.Errorf("cannot list packages. %w\n%s", err, bytes.TrimSpace(stderr.Bytes()))
 	}
 
 	baseDir, err := filepath.Abs(t.dir)
@@ -324,17 +338,27 @@ func (t *tparagen) packageDirs(ctx context.Context) ([]string, error) {
 	var (
 		dirs    []string
 		seen    = map[string]bool{}
-		loadErr []error
+		listErr []error
+		matched bool
 	)
 
-	for _, pkg := range pkgs {
+	for dec := json.NewDecoder(bytes.NewReader(out)); ; {
+		var pkg listedPackage
+		if err := dec.Decode(&pkg); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return nil, fmt.Errorf("cannot parse the output of go list. %w", err)
+		}
+
+		matched = true
+
 		// A pattern that matches nothing (a missing directory, a package
 		// outside the main modules, ...) is reported as a package without a
 		// directory. Errors of packages that do have one, such as a directory
 		// holding only test files, do not keep us from rewriting their tests.
 		if pkg.Dir == "" {
-			for _, e := range pkg.Errors {
-				loadErr = append(loadErr, errors.New(e.Error()))
+			if pkg.Error != nil {
+				listErr = append(listErr, errors.New(pkg.Error.Err))
 			}
 
 			continue
@@ -348,8 +372,12 @@ func (t *tparagen) packageDirs(ctx context.Context) ([]string, error) {
 		dirs = append(dirs, pkg.Dir)
 	}
 
-	if len(loadErr) > 0 {
-		return nil, fmt.Errorf("cannot load packages. %w", errors.Join(loadErr...))
+	if len(listErr) > 0 {
+		return nil, fmt.Errorf("cannot list packages. %w", errors.Join(listErr...))
+	}
+
+	if !matched {
+		return nil, fmt.Errorf("no packages matched %s", strings.Join(t.patterns, " "))
 	}
 
 	return dirs, nil
