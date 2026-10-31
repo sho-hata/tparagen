@@ -104,6 +104,30 @@ func TestRunReportNoChanges(t *testing.T) {
 	}
 }
 
+// A file that only gofmt rewrote is written too, so it counts as updated.
+func TestRunReportCountsReformattedFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := "package t\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n    t.Parallel()\n}\n"
+
+	if err := os.WriteFile(filepath.Join(dir, "f_test.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+
+	r := &tparagen{in: dir, outStream: &out, errStream: io.Discard, ignoreDirs: []string{defaultIgnoreDir}, verbose: true}
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	want := prefixPaths("f_test.go: reformatted by gofmt\nUpdated 1 of 1 test file: reformatted by gofmt\n", dir+"/")
+	if got := out.String(); got != want {
+		t.Errorf("output: %q, want %q", got, want)
+	}
+}
+
 // prefixPaths prefixes the file names at the start of the verbose lines of s.
 func prefixPaths(s, prefix string) string {
 	var b bytes.Buffer

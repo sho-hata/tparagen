@@ -27,7 +27,7 @@ const (
 // minGoVersion is the Go language version the processed tests are written for
 // (e.g. "1.21"). It decides whether loop variables have to be copied before a
 // parallel subtest, which is needed before Go 1.22. When it is empty, the go
-// directive of the nearest go.mod is used.
+// directive of the go.mod nearest to each file is used.
 //
 // A summary of the changes is written to outStream; with verbose, also one
 // line for every file that was changed or has tests left sequential.
@@ -37,21 +37,22 @@ func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories 
 		ignoreDirs = append(ignoreDirs, ignoreDirectories...)
 	}
 
+	// Reject an invalid version before looking at any file.
+	if minGoVersion != "" {
+		if _, err := needFixLoopVar(minGoVersion); err != nil {
+			return err
+		}
+	}
+
 	t := &tparagen{
-		in:         defaultTargetDir,
-		dest:       "",
-		outStream:  outStream,
-		errStream:  errStream,
-		ignoreDirs: ignoreDirs,
-		verbose:    verbose,
+		in:           defaultTargetDir,
+		dest:         "",
+		outStream:    outStream,
+		errStream:    errStream,
+		ignoreDirs:   ignoreDirs,
+		minGoVersion: minGoVersion,
+		verbose:      verbose,
 	}
-
-	needFix, err := t.resolveNeedFixLoopVar(minGoVersion)
-	if err != nil {
-		return err
-	}
-
-	t.needFixLoopVar = needFix
 
 	return t.run(ctx)
 }
@@ -60,8 +61,12 @@ type tparagen struct {
 	in, dest             string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
-	needFixLoopVar       bool
 	verbose              bool
+
+	// minGoVersion overrides the go directive of every go.mod when set.
+	minGoVersion string
+	modules      moduleFinder
+	warnNoGoMod  sync.Once
 }
 
 func (t *tparagen) run(ctx context.Context) error {
@@ -110,17 +115,24 @@ func (t *tparagen) run(ctx context.Context) error {
 
 		scanned.Add(1)
 
-		got, s, err := generateTParallel(path, src, t.needFixLoopVar)
+		needFix, err := t.needFixLoopVarIn(filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+
+		got, s, err := generateTParallel(path, src, needFix)
 		if err != nil {
 			return fmt.Errorf("error occurred in Process(). %w", err)
 		}
 
-		if s != (fileStats{}) {
-			stats.Store(path, s)
+		if !bytes.Equal(src, got) {
+			s.rewritten = true
+
+			changes.Store(path, got)
 		}
 
-		if !bytes.Equal(src, got) {
-			changes.Store(path, got)
+		if s != (fileStats{}) {
+			stats.Store(path, s)
 		}
 
 		return nil
@@ -166,7 +178,7 @@ func (t *tparagen) report(stats *sync.Map, scanned int) {
 		paths = append(paths, path)
 		total.add(s)
 
-		if s.parallel > 0 || s.loopVarCopies > 0 {
+		if s.rewritten {
 			updated++
 		}
 
@@ -187,7 +199,7 @@ func (t *tparagen) report(stats *sync.Map, scanned int) {
 		fmt.Fprintf(t.outStream, "No changes in %s\n", plural(scanned, "test file", "test files"))
 	} else {
 		fmt.Fprintf(t.outStream, "Updated %d of %s: %s\n", updated, plural(scanned, "test file", "test files"),
-			describeStats(fileStats{parallel: total.parallel, loopVarCopies: total.loopVarCopies}))
+			describeStats(fileStats{parallel: total.parallel, loopVarCopies: total.loopVarCopies, rewritten: true}))
 	}
 
 	if total.sequential > 0 {
@@ -216,6 +228,10 @@ func describeStats(s fileStats) string {
 
 	if s.sequential > 0 {
 		parts = append(parts, plural(s.sequential, "test", "tests")+" left sequential")
+	}
+
+	if len(parts) == 0 && s.rewritten {
+		parts = append(parts, "reformatted by gofmt")
 	}
 
 	return strings.Join(parts, ", ")

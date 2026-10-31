@@ -94,38 +94,80 @@ func TestGoVersionFromGoModWalksUp(t *testing.T) {
 	}
 }
 
-func TestResolveNeedFixLoopVar(t *testing.T) {
+func TestNeedFixLoopVarIn(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module m\n\ngo 1.22\n"), 0o644); err != nil {
+	// root (go 1.22) contains old (go 1.21), a module of its own, and plain,
+	// a package of root.
+	root := t.TempDir()
+	old := filepath.Join(root, "old", "pkg")
+	plain := filepath.Join(root, "plain")
+
+	for _, dir := range []string{old, plain} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module m\n\ngo 1.22\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	tp := &tparagen{in: dir, errStream: io.Discard}
+	if err := os.WriteFile(filepath.Join(root, "old", "go.mod"), []byte("module m/old\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name         string
 		minGoVersion string
+		dir          string
 		want         bool
 		wantErr      bool
 	}{
-		{name: "detected from go.mod", minGoVersion: "", want: false},
-		{name: "explicit version wins over go.mod", minGoVersion: "1.21", want: true},
-		{name: "invalid explicit version", minGoVersion: "bogus", wantErr: true},
+		{name: "detected from go.mod", dir: plain, want: false},
+		{name: "a nested module has its own version", dir: old, want: true},
+		{name: "explicit version wins over go.mod", minGoVersion: "1.21", dir: plain, want: true},
+		{name: "explicit version wins over a nested go.mod", minGoVersion: "1.22", dir: old, want: false},
+		{name: "invalid explicit version", minGoVersion: "bogus", dir: plain, wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := tp.resolveNeedFixLoopVar(tt.minGoVersion)
+			tp := &tparagen{in: root, errStream: io.Discard, minGoVersion: tt.minGoVersion}
+
+			got, err := tp.needFixLoopVarIn(tt.dir)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
 			}
 
 			if got != tt.want {
-				t.Errorf("resolveNeedFixLoopVar(%q) = %v, want %v", tt.minGoVersion, got, tt.want)
+				t.Errorf("needFixLoopVarIn(%q) = %v, want %v", tt.dir, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseModulePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{name: "plain", src: "module example.com/m\n\ngo 1.21\n", want: "example.com/m"},
+		{name: "quoted with comment", src: "module \"example.com/m\" // c\n", want: "example.com/m"},
+		{name: "commented out", src: "// module example.com/m\n", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := parseModulePath([]byte(tt.src)); got != tt.want {
+				t.Errorf("parseModulePath() = %q, want %q", got, tt.want)
 			}
 		})
 	}
