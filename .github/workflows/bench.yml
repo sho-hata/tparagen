@@ -10,7 +10,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/bench.yml'
-      - 'internal/benchgate/**'
+      - 'internal/regressioncheck/**'
 permissions:
   contents: read
 
@@ -46,7 +46,7 @@ jobs:
           cp -r internal/benchcorpus "$RUNNER_TEMP/base/internal/benchcorpus"
 
           if ! (cd "$RUNNER_TEMP/base" && go test -c -o "$RUNNER_TEMP/base.test" .); then
-            echo "::warning title=No benchmark baseline::The head benchmarks do not build against base $BASE_SHA (API changed). The regression gate did not run."
+            echo "::warning title=No benchmark baseline::The head benchmarks do not build against base $BASE_SHA (API changed). The regression check did not run."
             {
               echo "### Benchmarks"
               echo "No baseline: the head benchmarks do not build against base \`$BASE_SHA\` (API changed). Nothing to compare."
@@ -75,7 +75,7 @@ jobs:
             done
           done
 
-      - name: compare and gate
+      - name: compare
         if: steps.build.outputs.has_base == 'true'
         run: |
           {
@@ -86,4 +86,4 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           benchstat -format csv old.txt new.txt > result.csv
-          go run ./internal/benchgate result.csv | tee -a "$GITHUB_STEP_SUMMARY"
+          go run ./internal/regressioncheck result.csv | tee -a "$GITHUB_STEP_SUMMARY"

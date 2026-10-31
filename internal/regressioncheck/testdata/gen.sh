@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerates the seeded benchmark inputs and the benchstat CSV the gate tests
+# Regenerates the seeded benchmark inputs and the benchstat CSV the tests
 # read. Needs the benchstat version pinned in .github/workflows/bench.yml on
 # PATH, or its path in $BENCHSTAT. Run from any directory.
 set -euo pipefail

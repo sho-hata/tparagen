@@ -1,6 +1,5 @@
 // Package benchcorpus generates deterministic Go test files for benchmarking
-// tparagen. It is a library rather than test-only code because both the
-// benchmarks and the benchcorpus command build on it.
+// tparagen.
 package benchcorpus
 
 import (

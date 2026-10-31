@@ -115,26 +115,6 @@ func SampleTest(t *testing.T) {
 ### The following cases are not supported
 - Don't insert if the test function calls another function that calls `Setenv()`.
 
-## Performance
-On [kubernetes/kubernetes](https://github.com/kubernetes/kubernetes), tparagen rewrites **3,043 of its 3,611 test files in about 1.7 seconds**, using about 180 MiB of memory. The result still type-checks: `go vet` over the whole repository (the main module and all 35 staging modules) reports exactly the same findings before and after the rewrite.
-
-| Repository | Test files rewritten | `t.Parallel()` inserted | Wall time (mean ± σ) | Peak memory (mean) |
-|:---|---:|---:|---:|---:|
-| kubernetes/kubernetes @ `25b8637d` | 3,043 / 3,611 | 19,318 | 1.71 s ± 0.03 s | 180 MiB |
-
-Measured with [hyperfine](https://github.com/sharkdp/hyperfine) (10 runs after 1 warmup run) on an Apple M4 Pro (12 cores). Every run starts from a clean checkout (`git checkout -- .`), so each run really rewrites all files. Numbers depend on your machine.
-
-tparagen only checks that the rewritten tests compile. Making a test parallel can still break it at run time, for example when it changes global state such as feature gates through a helper function. Run your tests after the rewrite.
-
-To measure a generated corpus of any size (requires hyperfine):
-
-```
-$ scripts/benchmark.sh
-$ PACKAGES=1000 FILES=10 scripts/benchmark.sh
-```
-
-Every pull request runs the Go benchmarks for the pull request and for its base branch on the same machine. The check fails when time, allocations or peak memory get worse by more than 10% with statistical significance (see [`.github/workflows/bench.yml`](.github/workflows/bench.yml)).
-
 ## Synopsis
 ```
 $ tparagen

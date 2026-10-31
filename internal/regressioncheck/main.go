@@ -1,4 +1,4 @@
-// Command benchgate reads `benchstat -format csv` output and exits non-zero
+// Command regressioncheck reads `benchstat -format csv` output and exits non-zero
 // when a benchmark got significantly worse.
 package main
 
@@ -13,12 +13,12 @@ import (
 )
 
 // alpha is benchstat's default significance level; benchstat prints "~" instead
-// of a delta when p >= alpha, but the gate checks p itself rather than relying
+// of a delta when p >= alpha, but this command checks p itself rather than relying
 // on that.
 const alpha = 0.05
 
 // maxRegressionPercent is how much worse, in percent, each unit may get before
-// the gate fails. Units not listed here (e.g. B/s) are ignored.
+// the check fails. Units not listed here (e.g. B/s) are ignored.
 var maxRegressionPercent = map[string]float64{
 	"sec/op":     10,
 	"B/op":       10,
@@ -37,7 +37,7 @@ func (r regression) String() string {
 
 // check scans benchstat CSV for significant regressions beyond
 // maxRegressionPercent. It fails when it finds no benchmark row at all, so a
-// change in benchstat's output format cannot turn the gate into a silent pass.
+// change in benchstat's output format cannot turn into a silent pass.
 func check(r io.Reader) ([]regression, error) {
 	cr := csv.NewReader(r)
 	cr.FieldsPerRecord = -1
@@ -106,7 +106,7 @@ func main() {
 	if len(os.Args) > 1 {
 		f, err := os.Open(os.Args[1])
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "benchgate:", err)
+			fmt.Fprintln(os.Stderr, "regressioncheck:", err)
 			os.Exit(2)
 		}
 		defer f.Close()
@@ -116,7 +116,7 @@ func main() {
 
 	regressions, err := check(in)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "benchgate:", err)
+		fmt.Fprintln(os.Stderr, "regressioncheck:", err)
 		os.Exit(2)
 	}
 
