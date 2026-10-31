@@ -291,6 +291,77 @@ func TestX(t *testing.T) {
 }
 `,
 		},
+		{
+			testCase: "err declared with a deferred value does not keep other subtests sequential",
+			src: `package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	f, err := os.CreateTemp("", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	t.Run("1", func(t *testing.T) {
+		got, err := strconv.Atoi("1")
+		fmt.Println(got, err)
+	})
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	f, err := os.CreateTemp("", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		got, err := strconv.Atoi("1")
+		fmt.Println(got, err)
+	})
+}
+`,
+		},
+		{
+			testCase: "subtest started by a helper closure after a defer stays sequential",
+			src: `package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	run := func(name string) {
+		t.Run(name, func(t *testing.T) {
+			get(t, srv.URL)
+		})
+	}
+	run("1")
+}
+`,
+			want: `package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	run := func(name string) {
+		t.Run(name, func(t *testing.T) {
+			get(t, srv.URL)
+		})
+	}
+	run("1")
+}
+`,
+		},
 	}
 
 	for _, tt := range tests {
