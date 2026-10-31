@@ -117,7 +117,8 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 		// So must one that captures a variable its enclosing loop reassigns:
 		// every parallel subtest would see the value after the loop ends.
 		_, resultDiscarded := stack[len(stack)-1].(*ast.ExprStmt)
-		mayParallel := resultDiscarded && !capturesReassignedLoopVar(stack, fun)
+		mayParallel := resultDiscarded && !capturesReassignedLoopVar(stack, fun) &&
+			!usesDeferredValue(body, stack, fun, scope)
 
 		if insertTParallel(fun.Body, innerTestVar, scope, needFixLoopVar, mayParallel) && needFixLoopVar {
 			copyLoopVars(stack, fun)
@@ -218,6 +219,119 @@ func capturesReassignedLoopVar(stack []ast.Node, fun *ast.FuncLit) bool {
 	}
 
 	return false
+}
+
+// usesDeferredValue reports whether the subtest fun uses a variable that the
+// function starting it hands to a defer statement, such as srv in
+// `defer srv.Close()`. A parallel subtest only starts running after that
+// function has returned, i.e. after its deferred calls have closed the server,
+// canceled the context or waited for the WaitGroup. Variables declared
+// together with a deferred one count too: ctx in
+// `ctx, cancel := context.WithCancel(...); defer cancel()`.
+//
+// The function starting the subtest is the innermost function literal in
+// stack, or else the test whose body is body.
+func usesDeferredValue(body *ast.BlockStmt, stack []ast.Node, fun *ast.FuncLit, scope *testScope) bool {
+	encl, params := body, (*ast.FieldList)(nil)
+
+	for i := len(stack) - 1; i >= 0; i-- {
+		if lit, ok := stack[i].(*ast.FuncLit); ok {
+			encl, params = lit.Body, lit.Type.Params
+
+			break
+		}
+	}
+
+	for name := range deferredVars(encl, params) {
+		if !scope.tIdents[name] && identReferenced(fun.Body, name) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// deferredVars returns the variables of the function with body body and
+// parameters params that its defer statements refer to, together with the
+// variables declared in the same statement as each of them. Function literals
+// inside body are not searched: their defer statements run when they return.
+func deferredVars(body *ast.BlockStmt, params *ast.FieldList) map[string]bool {
+	// The names declared by each declaring statement, by name.
+	declaredWith := map[string][]string{}
+
+	declare := func(names []string) {
+		for _, name := range names {
+			if name != "_" {
+				declaredWith[name] = append(declaredWith[name], names...)
+			}
+		}
+	}
+
+	identNames := func(exprs ...ast.Expr) []string {
+		var names []string
+
+		for _, expr := range exprs {
+			if id, ok := expr.(*ast.Ident); ok {
+				names = append(names, id.Name)
+			}
+		}
+
+		return names
+	}
+
+	if params != nil {
+		for _, field := range params.List {
+			for _, name := range field.Names {
+				declare([]string{name.Name})
+			}
+		}
+	}
+
+	var defers []*ast.DeferStmt
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.DeferStmt:
+			defers = append(defers, n)
+
+			return false
+		case *ast.AssignStmt:
+			if n.Tok == token.DEFINE {
+				declare(identNames(n.Lhs...))
+			}
+		case *ast.RangeStmt:
+			if n.Tok == token.DEFINE {
+				declare(identNames(n.Key, n.Value))
+			}
+		case *ast.ValueSpec:
+			names := make([]string, 0, len(n.Names))
+			for _, name := range n.Names {
+				names = append(names, name.Name)
+			}
+
+			declare(names)
+		}
+
+		return true
+	})
+
+	vars := map[string]bool{}
+
+	for _, d := range defers {
+		ast.Inspect(d.Call, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok {
+				for _, name := range declaredWith[id.Name] {
+					vars[name] = true
+				}
+			}
+
+			return true
+		})
+	}
+
+	return vars
 }
 
 // copyLoopVars copies, at the top of each enclosing loop in stack, the loop

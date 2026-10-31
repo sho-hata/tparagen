@@ -111,6 +111,7 @@ func SampleTest(t *testing.T) {
 - [x] Copy loop variables (`tc := tc`) before parallel subtests when the target Go version is earlier than 1.22 (detected from `go.mod`, or `--min-go-version`)
 - [x] Do not insert if `t.Setenv()`, `t.Chdir()` (Go 1.24+) or `cryptotest.SetGlobalRandom()` (Go 1.26+) is called in the test function or in any of its subtests. Those calls panic when the test or one of its ancestors is parallel.
 - [x] Do not insert if the test function or any of its subtests changes global state: calls `os.Setenv`/`os.Unsetenv`/`os.Clearenv`/`os.Chdir`, `log.SetOutput`/`log.SetFlags`/`log.SetPrefix` or `slog.SetDefault`/`slog.SetLogLoggerLevel`, or assigns to a package-level variable (of any package), or a field or element of one.
+- [x] Keep a subtest sequential if it uses a variable that the function starting it hands to a `defer` statement, such as `srv` in `defer srv.Close()` or `ctx` in `ctx, cancel := context.WithCancel(ctx); defer cancel()`. Parallel subtests only start after that function has returned and its deferred calls have run. Use `t.Cleanup` instead to let them run in parallel.
 - [x] Ignore specified directories with cli option -i/-ignore
 - [x] nolint comment support: parallel,paralleltest
 
