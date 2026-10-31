@@ -113,6 +113,7 @@ func SampleTest(t *testing.T) {
 - [x] Do not insert if the test function or any of its subtests changes global state: calls `os.Setenv`/`os.Unsetenv`/`os.Clearenv`/`os.Chdir`, `log.SetOutput`/`log.SetFlags`/`log.SetPrefix` or `slog.SetDefault`/`slog.SetLogLoggerLevel`, or assigns to a package-level variable (of any package), or a field or element of one.
 - [x] Ignore specified directories with cli option -i/-ignore
 - [x] nolint comment support: parallel,paralleltest
+- [x] Only functions that `go test` runs as tests are rewritten. Methods such as `func (s) TestX(t *testing.T)` are left alone: they are run by suite runners that may set up and check process-wide state around every test. So are functions such as `Testable`, which `go test` does not treat as tests.
 
 ### The following cases are not supported
 - Don't insert if the test function calls another function that calls `Setenv()`.

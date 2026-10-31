@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -97,7 +98,18 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 	// changes global state: see deniesParallel.
 	insert := mayParallel && !callsParallel(body, testVar) && !deniesParallel(body, scope)
 
+	// Parallel subtests run after body returns, so they would see global
+	// state that body changed already restored, e.g. by a deferred call.
+	subtestsMayParallel := !changesGlobalStateOutsideSubtests(body, testVar, scope)
+
 	ast.PreorderStack(body, nil, func(n ast.Node, stack []ast.Node) bool {
+		// A t.Run inside a closure such as a helper can run several times,
+		// with captured state changed in between, so it is left alone.
+		// Subtest callbacks are handled at their t.Run call below.
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+
 		if !hasRunMethod(n, testVar) {
 			return true
 		}
@@ -114,10 +126,10 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 
 		// A parallel subtest's t.Run returns before the subtest finishes, so
 		// one whose result is used (`if !t.Run(...)`) must stay sequential.
-		// So must one that captures a variable its enclosing loop reassigns:
-		// every parallel subtest would see the value after the loop ends.
+		// So must one that captures a variable the test reassigns: every
+		// parallel subtest would see the last value.
 		_, resultDiscarded := stack[len(stack)-1].(*ast.ExprStmt)
-		mayParallel := resultDiscarded && !capturesReassignedLoopVar(stack, fun)
+		mayParallel := subtestsMayParallel && resultDiscarded && !assignsCapturedVar(body, fun, nil)
 
 		if insertTParallel(fun.Body, innerTestVar, scope, needFixLoopVar, mayParallel) && needFixLoopVar {
 			copyLoopVars(stack, fun)
@@ -158,66 +170,60 @@ func callsParallel(body *ast.BlockStmt, testVar string) bool {
 	return found
 }
 
-// capturesReassignedLoopVar reports whether fun references a variable that an
-// enclosing loop in stack assigns, other than the variables the loop declares
-// (which are per-iteration from Go 1.22, and copied by copyLoopVars before).
-// For example i in `for i < 3 { ...; i++ }`, or tc in `for _, tc = range xs`.
-// Assignments inside fun itself are not counted.
-func capturesReassignedLoopVar(stack []ast.Node, fun *ast.FuncLit) bool {
-	for _, n := range stack {
-		var declared []string
+// assignsCapturedVar reports whether node assigns a variable that fun
+// references, other than those in except. Examples are want in `want = 2`
+// between two subtests, i in `for i < 3 { ...; i++ }` and tc in
+// `for _, tc = range xs`: a parallel subtest runs after its parent returns and
+// would see the last value. The post statement of a loop that declares the
+// variable (the i++ in `for i := 0; ...; i++`) does not count: from Go 1.22
+// every iteration gets its own i, and copyLoopVars copies it before.
+// Assignments inside fun itself do not count.
+func assignsCapturedVar(node ast.Node, fun *ast.FuncLit, except []string) bool {
+	var captured bool
 
-		switch loop := n.(type) {
-		case *ast.RangeStmt:
-			declared = rangeLoopVarNames(loop)
-
-			if loop.Tok == token.ASSIGN {
-				for _, expr := range []ast.Expr{loop.Key, loop.Value} {
-					if id, ok := expr.(*ast.Ident); ok && identReferenced(fun.Body, id.Name) {
-						return true
-					}
-				}
+	check := func(exprs ...ast.Expr) {
+		for _, expr := range exprs {
+			id, ok := expr.(*ast.Ident)
+			if ok && !slices.Contains(except, id.Name) && identReferenced(fun.Body, id.Name) {
+				captured = true
 			}
-		case *ast.ForStmt:
-			declared = forLoopVarNames(loop)
-		default:
-			continue
-		}
-
-		var captured bool
-
-		ast.Inspect(n, func(m ast.Node) bool {
-			if captured || m == fun {
-				return false
-			}
-
-			var lhs []ast.Expr
-
-			switch s := m.(type) {
-			case *ast.AssignStmt:
-				if s.Tok != token.DEFINE {
-					lhs = s.Lhs
-				}
-			case *ast.IncDecStmt:
-				lhs = []ast.Expr{s.X}
-			}
-
-			for _, expr := range lhs {
-				id, ok := expr.(*ast.Ident)
-				if ok && !slices.Contains(declared, id.Name) && identReferenced(fun.Body, id.Name) {
-					captured = true
-				}
-			}
-
-			return !captured
-		})
-
-		if captured {
-			return true
 		}
 	}
 
-	return false
+	ast.Inspect(node, func(m ast.Node) bool {
+		if captured || m == fun {
+			return false
+		}
+
+		switch s := m.(type) {
+		case *ast.AssignStmt:
+			if s.Tok != token.DEFINE {
+				check(s.Lhs...)
+			}
+		case *ast.IncDecStmt:
+			check(s.X)
+		case *ast.RangeStmt:
+			if s.Tok == token.ASSIGN {
+				check(s.Key, s.Value)
+			}
+		case *ast.ForStmt:
+			if s.Post != nil {
+				captured = assignsCapturedVar(s.Post, fun, append(slices.Clone(except), forLoopVarNames(s)...))
+			}
+
+			for _, part := range []ast.Node{s.Init, s.Body} {
+				if !captured && part != nil {
+					captured = assignsCapturedVar(part, fun, except)
+				}
+			}
+
+			return false
+		}
+
+		return !captured
+	})
+
+	return captured
 }
 
 // copyLoopVars copies, at the top of each enclosing loop in stack, the loop
@@ -254,10 +260,19 @@ func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) {
 	}
 }
 
-// Checks if the function has the param type *testing.T; if it does, then the
+// Checks if the function is one that `go test` runs as a test: a top-level
+// function named TestXxx with a single *testing.T parameter. If it is, the
 // parameter name is returned, too.
 func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
-	if !strings.HasPrefix(funcDecl.Name.Name, testPrefix) {
+	if !isTestName(funcDecl.Name.Name) {
+		return false, ""
+	}
+
+	// `go test` never runs methods. A method such as `func (s) TestX(t
+	// *testing.T)` is run by a suite runner through reflection, which may
+	// set up and check process-wide state around every test (swap a global
+	// value, check for leaked goroutines), so it must not be made parallel.
+	if funcDecl.Recv != nil {
 		return false, ""
 	}
 
@@ -299,6 +314,24 @@ func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
 	}
 
 	return s.Name == testMethodPackageType, param.Names[0].Name
+}
+
+// isTestName reports whether name is the name of a test function as `go test`
+// sees it: Test, or Test followed by a character that is not a lower-case
+// letter. Testable or Testing are not tests.
+func isTestName(name string) bool {
+	rest, ok := strings.CutPrefix(name, testPrefix)
+	if !ok {
+		return false
+	}
+
+	if rest == "" {
+		return true
+	}
+
+	r, _ := utf8.DecodeRuneInString(rest)
+
+	return !unicode.IsLower(r)
 }
 
 func exprCallHasMethod(node ast.Node, receiverName, methodName string) bool {
@@ -491,6 +524,25 @@ func (s *testScope) changesGlobalState(n ast.Node) bool {
 	}
 
 	return false
+}
+
+// changesGlobalStateOutsideSubtests reports whether the test whose body is
+// body, and whose *testing.T is named testVar, changes global state itself,
+// outside the subtests it starts.
+func changesGlobalStateOutsideSubtests(body *ast.BlockStmt, testVar string, scope *testScope) bool {
+	var changes bool
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		if changes || hasRunMethod(n, testVar) {
+			return false
+		}
+
+		changes = scope.changesGlobalState(n)
+
+		return !changes
+	})
+
+	return changes
 }
 
 // rootIdent returns the variable that expr, the left-hand side of an
