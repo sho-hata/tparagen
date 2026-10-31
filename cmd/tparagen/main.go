@@ -15,6 +15,7 @@ import (
 
 var (
 	ignoreDirectories = kingpin.Flag("ignore", "ignore directory names. ex: foo,bar,baz\n(testdata directory is always ignored.)").String()
+	verbose           = kingpin.Flag("verbose", "print a line for every file that was changed or has tests left sequential.").Short('v').Bool()
 	minGoVersion      = kingpin.Flag("min-go-version", "minimum go version of the target code. ex: 1.21\n(default: the go directive of the nearest go.mod. Loop variables are copied before parallel subtests when it is older than 1.22.)").String()
 )
 
@@ -30,7 +31,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := tparagen.Run(ctx, os.Stdout, os.Stderr, strings.Split(*ignoreDirectories, ","), *minGoVersion); err != nil {
+	if err := tparagen.Run(ctx, os.Stdout, os.Stderr, strings.Split(*ignoreDirectories, ","), *minGoVersion, *verbose); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}

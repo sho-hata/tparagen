@@ -9,8 +9,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/saracen/walker"
 )
@@ -26,7 +28,10 @@ const (
 // (e.g. "1.21"). It decides whether loop variables have to be copied before a
 // parallel subtest, which is needed before Go 1.22. When it is empty, the go
 // directive of the nearest go.mod is used.
-func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion string) error {
+//
+// A summary of the changes is written to outStream; with verbose, also one
+// line for every file that was changed or has tests left sequential.
+func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion string, verbose bool) error {
 	ignoreDirs := []string{defaultIgnoreDir}
 	if len(ignoreDirs) != 0 {
 		ignoreDirs = append(ignoreDirs, ignoreDirectories...)
@@ -38,6 +43,7 @@ func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories 
 		outStream:  outStream,
 		errStream:  errStream,
 		ignoreDirs: ignoreDirs,
+		verbose:    verbose,
 	}
 
 	needFix, err := t.resolveNeedFixLoopVar(minGoVersion)
@@ -55,6 +61,7 @@ type tparagen struct {
 	outStream, errStream io.Writer
 	ignoreDirs           []string
 	needFixLoopVar       bool
+	verbose              bool
 }
 
 func (t *tparagen) run(ctx context.Context) error {
@@ -64,7 +71,14 @@ func (t *tparagen) run(ctx context.Context) error {
 	// inside the directories being walked would also disturb the concurrent
 	// directory listing. walker.Walk() may execute concurrently, so sync.Map
 	// is used.
-	var changes sync.Map
+	var (
+		changes sync.Map
+		// fileStats of every file where something was done or left
+		// sequential, keyed by file path.
+		stats sync.Map
+		// Number of test files read.
+		scanned atomic.Int64
+	)
 
 	if err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
 		// Abort the scan early on interruption (SIGINT/SIGTERM); nothing has
@@ -94,9 +108,15 @@ func (t *tparagen) run(ctx context.Context) error {
 			return fmt.Errorf("cannot read %s. %w", path, err)
 		}
 
-		got, err := GenerateTParallel(path, src, t.needFixLoopVar)
+		scanned.Add(1)
+
+		got, s, err := generateTParallel(path, src, t.needFixLoopVar)
 		if err != nil {
 			return fmt.Errorf("error occurred in Process(). %w", err)
+		}
+
+		if s != (fileStats{}) {
+			stats.Store(path, s)
 		}
 
 		if !bytes.Equal(src, got) {
@@ -120,7 +140,94 @@ func (t *tparagen) run(ctx context.Context) error {
 	// Write every file now that every rewrite succeeded. This phase runs to
 	// completion without checking for cancellation so that the files are not
 	// left in a partially rewritten state.
-	return applyChanges(&changes)
+	if err := applyChanges(&changes); err != nil {
+		return err
+	}
+
+	t.report(&stats, int(scanned.Load()))
+
+	return nil
+}
+
+// report writes a summary of the run to outStream. One line per file would
+// drown the summary in a large repository, so per-file lines are written only
+// with verbose.
+func (t *tparagen) report(stats *sync.Map, scanned int) {
+	var (
+		paths   []string
+		total   fileStats
+		updated int
+	)
+
+	stats.Range(func(key, value any) bool {
+		path, _ := key.(string)
+		s, _ := value.(fileStats)
+
+		paths = append(paths, path)
+		total.add(s)
+
+		if s.parallel > 0 || s.loopVarCopies > 0 {
+			updated++
+		}
+
+		return true
+	})
+
+	slices.Sort(paths)
+
+	if t.verbose {
+		for _, path := range paths {
+			v, _ := stats.Load(path)
+			s, _ := v.(fileStats)
+			fmt.Fprintf(t.outStream, "%s: %s\n", filepath.Clean(path), describeStats(s))
+		}
+	}
+
+	if updated == 0 {
+		fmt.Fprintf(t.outStream, "No changes in %s\n", plural(scanned, "test file", "test files"))
+	} else {
+		fmt.Fprintf(t.outStream, "Updated %d of %s: %s\n", updated, plural(scanned, "test file", "test files"),
+			describeStats(fileStats{parallel: total.parallel, loopVarCopies: total.loopVarCopies}))
+	}
+
+	if total.sequential > 0 {
+		hint := ""
+		if !t.verbose {
+			hint = " Run with -v to see the files."
+		}
+
+		fmt.Fprintf(t.outStream, "%s left sequential: t.Parallel() is not safe there (t.Setenv, global state, ...).%s\n",
+			plural(total.sequential, "test", "tests"), hint)
+	}
+}
+
+// describeStats describes the non-zero counts of s, e.g.
+// "3 t.Parallel() added, 1 loop variable copied".
+func describeStats(s fileStats) string {
+	var parts []string
+
+	if s.parallel > 0 {
+		parts = append(parts, fmt.Sprintf("%d t.Parallel() added", s.parallel))
+	}
+
+	if s.loopVarCopies > 0 {
+		parts = append(parts, plural(s.loopVarCopies, "loop variable", "loop variables")+" copied")
+	}
+
+	if s.sequential > 0 {
+		parts = append(parts, plural(s.sequential, "test", "tests")+" left sequential")
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// plural formats n with the singular or the plural form of a noun.
+func plural(n int, singular, pluralForm string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, singular)
+	}
+
+	return fmt.Sprintf("%d %s", n, pluralForm)
 }
 
 // writeTempFile writes content to a new temporary file next to path, with the

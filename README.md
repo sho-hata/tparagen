@@ -135,6 +135,17 @@ func TestX(t *testing.T) {
 ## Synopsis
 ```
 $ tparagen
+Updated 9 of 10 test files: 112 t.Parallel() added
+8 tests left sequential: t.Parallel() is not safe there (t.Setenv, global state, ...). Run with -v to see the files.
+✨ Done in 0.02s
+```
+
+With `-v`, a line is printed for every file that was changed or has tests left sequential:
+```
+$ tparagen -v
+app_test.go: 23 t.Parallel() added
+args_test.go: 6 t.Parallel() added, 2 tests left sequential
+...
 ```
 
 ## Options
@@ -148,6 +159,8 @@ Flags:
                        --help-man).
       --ignore=IGNORE  ignore directory names. ex: foo,bar,baz (testdata
                        directory is always ignored.)
+  -v, --[no-]verbose   print a line for every file that was changed or has tests
+                       left sequential.
       --min-go-version=MIN-GO-VERSION
                        minimum go version of the target code. ex: 1.21 (default:
                        the go directive of the nearest go.mod. Loop variables

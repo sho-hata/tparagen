@@ -30,15 +30,41 @@ const (
 // - A byte slice containing the modified source code.
 // - An error if any issues occur during parsing or formatting.
 func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte, error) {
+	got, _, err := generateTParallel(filename, src, needFixLoopVar)
+
+	return got, err
+}
+
+// fileStats counts what generateTParallel did to one file.
+type fileStats struct {
+	// parallel is the number of t.Parallel() calls inserted.
+	parallel int
+	// loopVarCopies is the number of `tc := tc` copies inserted.
+	loopVarCopies int
+	// sequential is the number of tests and subtests that do not call
+	// t.Parallel() and were left that way because it is not safe.
+	sequential int
+}
+
+func (s *fileStats) add(o fileStats) {
+	s.parallel += o.parallel
+	s.loopVarCopies += o.loopVarCopies
+	s.sequential += o.sequential
+}
+
+// generateTParallel is GenerateTParallel that also reports what it did.
+func generateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte, fileStats, error) {
+	var stats fileStats
+
 	fs := token.NewFileSet()
 
 	f, err := parser.ParseFile(fs, filename, src, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("cannot parse file. %w", err)
+		return nil, stats, fmt.Errorf("cannot parse file. %w", err)
 	}
 
 	if !isTparagenTargetFile(f) {
-		return src, nil
+		return src, stats, nil
 	}
 
 	// A `//go:build go1.N` line sets the language version of this file, so
@@ -70,6 +96,7 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 			tIdents: testingTIdents(testVar, funcDecl.Body),
 			locals:  localNames(funcDecl),
 			imports: imports,
+			stats:   &stats,
 		}
 
 		insertTParallel(funcDecl.Body, testVar, scope, needFixLoopVar, true)
@@ -80,10 +107,10 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 	// gofmt
 	var fmtedBuf bytes.Buffer
 	if err := format.Node(&fmtedBuf, fs, f); err != nil {
-		return nil, fmt.Errorf("gofmt error occurred. %w", err)
+		return nil, stats, fmt.Errorf("gofmt error occurred. %w", err)
 	}
 
-	return fmtedBuf.Bytes(), nil
+	return fmtedBuf.Bytes(), stats, nil
 }
 
 // insertTParallel inserts Parallel() into the test whose body is body and whose
@@ -95,7 +122,8 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 	// Insert Parallel() unless the test already calls it, or the test (or
 	// any of its subtests, at any depth) calls t.Setenv/t.Chdir etc. or
 	// changes global state: see deniesParallel.
-	insert := mayParallel && !callsParallel(body, testVar) && !deniesParallel(body, scope)
+	alreadyParallel := callsParallel(body, testVar)
+	insert := mayParallel && !alreadyParallel && !deniesParallel(body, scope)
 
 	// Parallel subtests run after body returns, so they would see global
 	// state that body changed already restored, e.g. by a deferred call.
@@ -131,7 +159,7 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 		mayParallel := subtestsMayParallel && resultDiscarded && !assignsCapturedVar(body, fun, nil)
 
 		if insertTParallel(fun.Body, innerTestVar, scope, needFixLoopVar, mayParallel) && needFixLoopVar {
-			copyLoopVars(stack, fun)
+			scope.stats.loopVarCopies += copyLoopVars(stack, fun)
 		}
 
 		return false
@@ -140,6 +168,9 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 	if insert {
 		tpStmt := buildTParallelStmt(body.Lbrace, testVar)
 		body.List = append([]ast.Stmt{tpStmt}, body.List...)
+		scope.stats.parallel++
+	} else if !alreadyParallel {
+		scope.stats.sequential++
 	}
 
 	return insert
@@ -228,15 +259,17 @@ func assignsCapturedVar(node ast.Node, fun *ast.FuncLit, except []string) bool {
 // copyLoopVars copies, at the top of each enclosing loop in stack, the loop
 // variables that the now parallel subtest fun captures: `tc := tc`. Before Go
 // 1.22 every iteration shares the same loop variable
-// (https://go.dev/doc/go1.22#language).
-func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) {
-	for _, n := range stack {
+// (https://go.dev/doc/go1.22#language). It returns the number of copies.
+func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) int {
+	var n int
+
+	for _, node := range stack {
 		var (
 			loopVars []string
 			body     *ast.BlockStmt
 		)
 
-		switch loop := n.(type) {
+		switch loop := node.(type) {
 		case *ast.RangeStmt:
 			loopVars, body = rangeLoopVarNames(loop), loop.Body
 		case *ast.ForStmt:
@@ -256,7 +289,10 @@ func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) {
 		}
 
 		body.List = append(copies, body.List...)
+		n += len(copies)
 	}
+
+	return n
 }
 
 // Checks if the function has the param type *testing.T; if it does, then the
@@ -360,6 +396,8 @@ type testScope struct {
 	// imports maps the name a package is referred to by in the file to its
 	// import path.
 	imports map[string]string
+	// stats collects what was done to the file the function is in.
+	stats *fileStats
 }
 
 // importNames maps the name each package imported by f is referred to by to
