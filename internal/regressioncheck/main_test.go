@@ -77,6 +77,7 @@ func TestCheckThresholds(t *testing.T) {
 		{"allocs/op above the limit fails", "allocs/op", "+10.50%", "p=0.001", true},
 		{"insignificant p passes", "sec/op", "+50.00%", "p=0.050", false},
 		{"unlisted unit is ignored", "B/s", "+90.00%", "p=0.001", false},
+		{"growth from zero (benchstat prints ?) fails", "allocs/op", "?", "p=0.001", true},
 	}
 
 	for _, tt := range tests {

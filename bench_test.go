@@ -5,6 +5,7 @@ package tparagen
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -61,6 +63,13 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 
+		peak, err := ownPeakRSS()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		fmt.Println(peak)
 		os.Exit(0)
 	}
 
@@ -169,23 +178,24 @@ func peakRSS(b *testing.B, pristine string) float64 {
 			b.Fatal(err)
 		}
 
-		cmd := exec.Command(os.Args[0])
+		self, err := os.Executable()
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		cmd := exec.Command(self)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), peakRSSChildEnv+"=1")
+		cmd.Stderr = os.Stderr
 
-		if out, err := cmd.CombinedOutput(); err != nil {
-			b.Fatalf("child run failed: %v\n%s", err, out)
+		out, err := cmd.Output()
+		if err != nil {
+			b.Fatalf("child run failed: %v", err)
 		}
 
-		ru, ok := cmd.ProcessState.SysUsage().(*syscall.Rusage)
-		if !ok {
-			b.Fatal("no rusage for the child process")
-		}
-
-		rss := float64(ru.Maxrss)
-		if runtime.GOOS != "darwin" {
-			// Maxrss is in kilobytes everywhere but darwin, where it is bytes.
-			rss *= 1024
+		rss, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+		if err != nil {
+			b.Fatalf("child printed %q, want its peak RSS in bytes", out)
 		}
 
 		peaks = append(peaks, rss)
@@ -194,6 +204,41 @@ func peakRSS(b *testing.B, pristine string) float64 {
 	slices.Sort(peaks)
 
 	return peaks[len(peaks)/2]
+}
+
+// ownPeakRSS returns the peak resident set size of this process in bytes. The
+// parent cannot read it from the child's rusage on Linux: os/exec starts the
+// child with vfork, and the kernel carries the parent's high-water mark into
+// the child's ru_maxrss. VmHWM belongs to the memory the child got at exec.
+func ownPeakRSS() (float64, error) {
+	if runtime.GOOS == "linux" {
+		status, err := os.ReadFile("/proc/self/status")
+		if err != nil {
+			return 0, err
+		}
+
+		for line := range strings.Lines(string(status)) {
+			if v, ok := strings.CutPrefix(line, "VmHWM:"); ok {
+				kb, err := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(v), " kB"), 64)
+
+				return kb * 1024, err
+			}
+		}
+
+		return 0, errors.New("no VmHWM in /proc/self/status")
+	}
+
+	var ru syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
+		return 0, err
+	}
+
+	// Maxrss is in bytes on darwin and in kilobytes elsewhere.
+	if runtime.GOOS == "darwin" {
+		return float64(ru.Maxrss), nil
+	}
+
+	return float64(ru.Maxrss) * 1024, nil
 }
 
 func resetDir(b *testing.B, dir string) {

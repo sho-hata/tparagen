@@ -21,6 +21,11 @@ concurrency:
 jobs:
   bench:
     runs-on: ubuntu-latest
+    # bash (rather than the default bash -e) also sets pipefail, so the
+    # regression check fails the step even though its output goes through tee.
+    defaults:
+      run:
+        shell: bash
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       ROUNDS: 10

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -78,9 +79,14 @@ func check(r io.Reader) ([]regression, error) {
 			continue
 		}
 
-		delta, err := strconv.ParseFloat(strings.TrimSuffix(strings.TrimPrefix(row[5], "+"), "%"), 64)
-		if err != nil {
-			return nil, fmt.Errorf("%s %s: cannot parse delta %q", row[0], unit, row[5])
+		// benchstat prints "?" when the base value is 0, e.g. allocs 0 -> 5.
+		delta := math.Inf(1)
+
+		if row[5] != "?" {
+			delta, err = strconv.ParseFloat(strings.TrimSuffix(strings.TrimPrefix(row[5], "+"), "%"), 64)
+			if err != nil {
+				return nil, fmt.Errorf("%s %s: cannot parse delta %q", row[0], unit, row[5])
+			}
 		}
 
 		var p float64
