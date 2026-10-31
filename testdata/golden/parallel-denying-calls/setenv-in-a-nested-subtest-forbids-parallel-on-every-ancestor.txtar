@@ -1,0 +1,26 @@
+Name: Setenv in a nested subtest forbids Parallel on every ancestor
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("outer", func(t *testing.T) {
+		t.Run("inner", func(t *testing.T) {
+			t.Setenv("X", "y")
+		})
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("outer", func(t *testing.T) {
+		t.Run("inner", func(t *testing.T) {
+			t.Setenv("X", "y")
+		})
+	})
+}

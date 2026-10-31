@@ -1,0 +1,38 @@
+Name: subtest capturing a variable the loop reassigns is not made parallel
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	i := 0
+	for i < 3 {
+		t.Run("1", func(t *testing.T) {
+			fmt.Println(i)
+		})
+		t.Run("2", func(t *testing.T) {
+			fmt.Println("2")
+		})
+		i++
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	i := 0
+	for i < 3 {
+		t.Run("1", func(t *testing.T) {
+			fmt.Println(i)
+		})
+		t.Run("2", func(t *testing.T) {
+			t.Parallel()
+			fmt.Println("2")
+		})
+		i++
+	}
+}

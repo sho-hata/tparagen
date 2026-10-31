@@ -1,0 +1,29 @@
+Name: three-clause loop whose body changes the loop variable
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	for i := 0; i < 4; i++ {
+		t.Run("sub", func(t *testing.T) {
+			fmt.Println(i)
+		})
+		i++
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	for i := 0; i < 4; i++ {
+		t.Run("sub", func(t *testing.T) {
+			fmt.Println(i)
+		})
+		i++
+	}
+}

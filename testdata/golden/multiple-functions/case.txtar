@@ -1,0 +1,77 @@
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestAlreadyParallel(t *testing.T) {
+	t.Parallel()
+}
+
+func TestAfterParallel(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		fmt.Println("1")
+	})
+}
+
+func TestHasSetenv(t *testing.T) {
+	t.Setenv("X", "y")
+}
+
+func TestAfterSetenv(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		fmt.Println("1")
+	})
+}
+
+func TestAfterSetenvWithRange(t *testing.T) {
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fmt.Println(tc.name)
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestAlreadyParallel(t *testing.T) {
+	t.Parallel()
+}
+
+func TestAfterParallel(t *testing.T) {
+	t.Parallel()
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+}
+
+func TestHasSetenv(t *testing.T) {
+	t.Setenv("X", "y")
+}
+
+func TestAfterSetenv(t *testing.T) {
+	t.Parallel()
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+}
+
+func TestAfterSetenvWithRange(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}

@@ -1,0 +1,31 @@
+Name: only the key is captured
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	cases := []string{"a"}
+	for i := range cases {
+		t.Run("x", func(t *testing.T) {
+			fmt.Println(cases[i])
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	cases := []string{"a"}
+	for i := range cases {
+		i := i
+		t.Run("x", func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(cases[i])
+		})
+	}
+}

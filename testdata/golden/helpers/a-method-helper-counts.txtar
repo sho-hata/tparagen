@@ -1,0 +1,32 @@
+Name: a method helper counts
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+type env struct{}
+
+func (e *env) setup(t *testing.T) {
+	t.Setenv("A", "1")
+}
+
+func TestX(t *testing.T) {
+	e := &env{}
+	e.setup(t)
+}
+-- golden.go --
+package t
+
+import "testing"
+
+type env struct{}
+
+func (e *env) setup(t *testing.T) {
+	t.Setenv("A", "1")
+}
+
+func TestX(t *testing.T) {
+	e := &env{}
+	e.setup(t)
+}

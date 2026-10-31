@@ -1,0 +1,22 @@
+Name: Chdir in a subtest
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		t.Chdir("testdata")
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		t.Chdir("testdata")
+	})
+}

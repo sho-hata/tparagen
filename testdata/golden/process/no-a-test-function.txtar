@@ -1,0 +1,10 @@
+Name: no a test function
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+func NoTestFunction() {}
+-- golden.go --
+package t
+
+func NoTestFunction() {}

@@ -1,0 +1,24 @@
+Name: insert Parallel using the actual receiver name when it is not t
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelReceiverNotT(_t *testing.T) {
+	_t.Run("1", func(inner *testing.T) {
+		fmt.Println("1")
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelReceiverNotT(_t *testing.T) {
+	_t.Parallel()
+	_t.Run("1", func(inner *testing.T) {
+		inner.Parallel()
+		fmt.Println("1")
+	})
+}

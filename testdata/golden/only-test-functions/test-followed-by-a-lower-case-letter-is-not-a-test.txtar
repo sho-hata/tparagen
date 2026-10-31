@@ -1,0 +1,26 @@
+Name: Test followed by a lower-case letter is not a test
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func Testable(t *testing.T) {
+	fmt.Println("x")
+}
+
+func Testé(t *testing.T) {
+	fmt.Println("x")
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func Testable(t *testing.T) {
+	fmt.Println("x")
+}
+
+func Testé(t *testing.T) {
+	fmt.Println("x")
+}

@@ -1,0 +1,37 @@
+Name: missing t.Parallel in range subtest
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelRangeNotUsingRangeValueInTRun(t *testing.T) {
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fmt.Println(tc.name)
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelRangeNotUsingRangeValueInTRun(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name string
+	}{{name: "foo"}}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(tc.name)
+		})
+	}
+}

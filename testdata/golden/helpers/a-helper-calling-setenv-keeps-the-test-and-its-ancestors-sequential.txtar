@@ -1,0 +1,37 @@
+Name: a helper calling Setenv keeps the test and its ancestors sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func setEnv(t *testing.T) {
+	t.Setenv("A", "1")
+}
+
+func TestX(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		setEnv(t)
+	})
+	t.Run("2", func(t *testing.T) {
+		fmt.Println("2")
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func setEnv(t *testing.T) {
+	t.Setenv("A", "1")
+}
+
+func TestX(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		setEnv(t)
+	})
+	t.Run("2", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("2")
+	})
+}

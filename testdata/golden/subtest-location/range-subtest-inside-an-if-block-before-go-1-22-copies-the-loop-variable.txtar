@@ -1,0 +1,33 @@
+Name: range subtest inside an if block before Go 1.22 copies the loop variable
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	if !testing.Short() {
+		for _, tc := range []string{"a"} {
+			t.Run(tc, func(t *testing.T) {
+				fmt.Println(tc)
+			})
+		}
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	if !testing.Short() {
+		for _, tc := range []string{"a"} {
+			tc := tc
+			t.Run(tc, func(t *testing.T) {
+				t.Parallel()
+				fmt.Println(tc)
+			})
+		}
+	}
+}

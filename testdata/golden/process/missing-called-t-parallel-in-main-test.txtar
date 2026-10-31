@@ -1,0 +1,20 @@
+Name: missing called t.Parallel in main test
+NeedFixLoopVar: true
+NoFinalNewline: input
+-- input.go --
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Parallel()
+	t.Run("hoge", nil)
+}

@@ -1,0 +1,10 @@
+Name: looks like a test but is with param
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+func TestingFunctionLooksLikeATestButIsWithParam(i int) {}
+-- golden.go --
+package t
+
+func TestingFunctionLooksLikeATestButIsWithParam(i int) {}

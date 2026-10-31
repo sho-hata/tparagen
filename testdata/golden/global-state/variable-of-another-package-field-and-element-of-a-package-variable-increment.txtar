@@ -1,0 +1,42 @@
+Name: variable of another package, field and element of a package variable, increment
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestA(t *testing.T) {
+	http.DefaultClient = client
+}
+
+func TestB(t *testing.T) {
+	config.Debug = true
+}
+
+func TestC(t *testing.T) {
+	registry["x"] = handler
+}
+
+func TestD(t *testing.T) {
+	counter++
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestA(t *testing.T) {
+	http.DefaultClient = client
+}
+
+func TestB(t *testing.T) {
+	config.Debug = true
+}
+
+func TestC(t *testing.T) {
+	registry["x"] = handler
+}
+
+func TestD(t *testing.T) {
+	counter++
+}

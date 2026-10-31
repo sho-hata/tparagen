@@ -1,0 +1,32 @@
+Name: a value that is already copied is not copied again
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	cases := []string{"a"}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc, func(t *testing.T) {
+			fmt.Println(tc)
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	cases := []string{"a"}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(tc)
+		})
+	}
+}

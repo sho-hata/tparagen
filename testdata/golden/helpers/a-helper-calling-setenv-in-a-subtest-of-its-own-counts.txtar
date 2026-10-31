@@ -1,0 +1,30 @@
+Name: a helper calling Setenv in a subtest of its own counts
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func runWithEnv(t *testing.T) {
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("A", "1")
+	})
+}
+
+func TestX(t *testing.T) {
+	runWithEnv(t)
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func runWithEnv(t *testing.T) {
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("A", "1")
+	})
+}
+
+func TestX(t *testing.T) {
+	runWithEnv(t)
+}

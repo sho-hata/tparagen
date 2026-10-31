@@ -1,0 +1,24 @@
+Name: os.Chdir through an import alias
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import (
+	goos "os"
+	"testing"
+)
+
+func TestX(t *testing.T) {
+	goos.Chdir("/")
+}
+-- golden.go --
+package t
+
+import (
+	goos "os"
+	"testing"
+)
+
+func TestX(t *testing.T) {
+	goos.Chdir("/")
+}

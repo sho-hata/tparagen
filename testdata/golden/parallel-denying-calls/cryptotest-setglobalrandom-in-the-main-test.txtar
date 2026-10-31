@@ -1,0 +1,25 @@
+Name: cryptotest.SetGlobalRandom in the main test
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 1)
+	t.Run("1", func(t *testing.T) {
+		fmt.Println("1")
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	cryptotest.SetGlobalRandom(t, 1)
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+}

@@ -1,0 +1,32 @@
+Name: a helper closure taking testing.TB counts
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	doTest := func(tb testing.TB) {
+		testlib.Mktmp(tb)
+		tb.Chdir("x")
+	}
+
+	t.Run("1", func(t *testing.T) {
+		doTest(t)
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	doTest := func(tb testing.TB) {
+		testlib.Mktmp(tb)
+		tb.Chdir("x")
+	}
+
+	t.Run("1", func(t *testing.T) {
+		doTest(t)
+	})
+}

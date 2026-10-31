@@ -1,0 +1,35 @@
+Name: subtest started by a helper closure
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	want := 1
+	check := func(name string) {
+		t.Run(name, func(t *testing.T) {
+			fmt.Println(want)
+		})
+	}
+	check("one")
+	want = 2
+	check("two")
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	want := 1
+	check := func(name string) {
+		t.Run(name, func(t *testing.T) {
+			fmt.Println(want)
+		})
+	}
+	check("one")
+	want = 2
+	check("two")
+}

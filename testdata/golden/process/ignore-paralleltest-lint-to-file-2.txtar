@@ -1,0 +1,21 @@
+Name: ignore paralleltest lint to file
+NeedFixLoopVar: true
+NoFinalNewline: input golden
+-- input.go --
+//nolint:paralleltest
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}
+-- golden.go --
+//nolint:paralleltest
+package t
+
+import "testing"
+
+func TestFunctionMissingParallelInMain(t *testing.T) {
+	t.Run("hoge", nil)
+}

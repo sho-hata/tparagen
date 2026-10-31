@@ -1,0 +1,33 @@
+Name: subtest started by a helper closure after a defer stays sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	run := func(name string) {
+		t.Run(name, func(t *testing.T) {
+			get(t, srv.URL)
+		})
+	}
+	run("1")
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	run := func(name string) {
+		t.Run(name, func(t *testing.T) {
+			get(t, srv.URL)
+		})
+	}
+	run("1")
+}

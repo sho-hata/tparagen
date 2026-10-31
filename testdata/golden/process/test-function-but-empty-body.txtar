@@ -1,0 +1,10 @@
+Name: test function but empty body
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+func AbcFunctionSuccessful(t *testing.T) {}
+-- golden.go --
+package t
+
+func AbcFunctionSuccessful(t *testing.T) {}

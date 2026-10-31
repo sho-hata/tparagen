@@ -1,0 +1,33 @@
+Name: go1.8 build constraint copies the loop variable
+NeedFixLoopVar: false
+-- input.go --
+//go:build go1.8
+
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	for _, tc := range []string{"a"} {
+		t.Run(tc, func(t *testing.T) {
+			fmt.Println(tc)
+		})
+	}
+}
+-- golden.go --
+//go:build go1.8
+
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []string{"a"} {
+		tc := tc
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(tc)
+		})
+	}
+}

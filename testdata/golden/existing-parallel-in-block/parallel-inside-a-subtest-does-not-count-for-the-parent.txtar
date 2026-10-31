@@ -1,0 +1,27 @@
+Name: Parallel inside a subtest does not count for the parent
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	if true {
+		t.Run("1", func(t *testing.T) {
+			t.Parallel()
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	if true {
+		t.Run("1", func(t *testing.T) {
+			t.Parallel()
+		})
+	}
+}

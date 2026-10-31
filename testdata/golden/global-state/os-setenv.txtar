@@ -1,0 +1,24 @@
+Name: os.Setenv
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import (
+	"os"
+	"testing"
+)
+
+func TestX(t *testing.T) {
+	os.Setenv("X", "y")
+}
+-- golden.go --
+package t
+
+import (
+	"os"
+	"testing"
+)
+
+func TestX(t *testing.T) {
+	os.Setenv("X", "y")
+}

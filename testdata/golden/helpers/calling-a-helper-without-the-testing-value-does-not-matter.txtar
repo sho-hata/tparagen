@@ -1,0 +1,29 @@
+Name: calling a helper without the testing value does not matter
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func setEnv(t *testing.T) {
+	t.Setenv("A", "1")
+}
+
+func TestX(t *testing.T) {
+	f := setEnv
+	_ = f
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func setEnv(t *testing.T) {
+	t.Setenv("A", "1")
+}
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	f := setEnv
+	_ = f
+}

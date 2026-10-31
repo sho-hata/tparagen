@@ -1,0 +1,35 @@
+Name: an unrelated short variable declaration does not count as a copy
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	cases := []string{"a"}
+	y := 1
+	for _, tc := range cases {
+		x := y
+		t.Run(tc, func(t *testing.T) {
+			fmt.Println(tc, x)
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	cases := []string{"a"}
+	y := 1
+	for _, tc := range cases {
+		tc := tc
+		x := y
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(tc, x)
+		})
+	}
+}

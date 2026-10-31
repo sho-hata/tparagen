@@ -1,0 +1,27 @@
+Name: missing called t.Parallel in a sub test
+NeedFixLoopVar: true
+-- input.go --
+package t
+
+import "testing"
+
+func TestFunctionHasParallelInMainOneTestRunMissingHasParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(t *testing.T) {
+		fmt.Println("1")
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestFunctionHasParallelInMainOneTestRunMissingHasParallel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		fmt.Println("1")
+	})
+}

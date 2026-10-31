@@ -1,0 +1,24 @@
+Name: slog.SetDefault
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import (
+	"log/slog"
+	"testing"
+)
+
+func TestX(t *testing.T) {
+	slog.SetDefault(logger)
+}
+-- golden.go --
+package t
+
+import (
+	"log/slog"
+	"testing"
+)
+
+func TestX(t *testing.T) {
+	slog.SetDefault(logger)
+}

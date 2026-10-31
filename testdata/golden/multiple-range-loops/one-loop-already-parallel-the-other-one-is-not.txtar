@@ -1,0 +1,40 @@
+Name: one loop already parallel, the other one is not
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	for _, tc := range []string{"a"} {
+		t.Run(tc, func(t *testing.T) {
+			fmt.Println(tc)
+		})
+	}
+	for _, tc := range []string{"b"} {
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(tc)
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []string{"a"} {
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(tc)
+		})
+	}
+	for _, tc := range []string{"b"} {
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			fmt.Println(tc)
+		})
+	}
+}
