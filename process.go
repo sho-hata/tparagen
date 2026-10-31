@@ -32,7 +32,8 @@ const (
 func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte, error) {
 	fs := token.NewFileSet()
 
-	f, err := parser.ParseFile(fs, filename, src, parser.ParseComments)
+	// Scope analysis below uses names, not the parser's deprecated object links.
+	f, err := parser.ParseFile(fs, filename, src, parser.ParseComments|parser.SkipObjectResolution)
 	if err != nil {
 		return nil, fmt.Errorf("cannot parse file. %w", err)
 	}
@@ -48,6 +49,7 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 	}
 
 	imports := importNames(f)
+	stack := make([]ast.Node, 0, 32)
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		funcDecl, ok := n.(*ast.FuncDecl)
@@ -72,7 +74,7 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 			imports: imports,
 		}
 
-		insertTParallel(funcDecl.Body, testVar, scope, needFixLoopVar, true)
+		insertTParallel(funcDecl.Body, testVar, scope, needFixLoopVar, true, stack)
 
 		return true
 	})
@@ -91,7 +93,7 @@ func GenerateTParallel(filename string, src []byte, needFixLoopVar bool) ([]byte
 // wherever they are started: at the top level, in a loop, in an if block, or
 // in another subtest. Parallel() is inserted into body itself only if
 // mayParallel. It reports whether Parallel() was inserted into body.
-func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, needFixLoopVar, mayParallel bool) bool {
+func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, needFixLoopVar, mayParallel bool, stack []ast.Node) bool {
 	// Insert Parallel() unless the test already calls it, or the test (or
 	// any of its subtests, at any depth) calls t.Setenv/t.Chdir etc. or
 	// changes global state: see deniesParallel.
@@ -101,7 +103,7 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 	// state that body changed already restored, e.g. by a deferred call.
 	subtestsMayParallel := !changesGlobalStateOutsideSubtests(body, testVar, scope)
 
-	ast.PreorderStack(body, nil, func(n ast.Node, stack []ast.Node) bool {
+	ast.PreorderStack(body, stack, func(n ast.Node, stack []ast.Node) bool {
 		// A t.Run inside a closure such as a helper can run several times,
 		// with captured state changed in between, so it is left alone.
 		// Subtest callbacks are handled at their t.Run call below.
@@ -130,7 +132,8 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 		_, resultDiscarded := stack[len(stack)-1].(*ast.ExprStmt)
 		mayParallel := subtestsMayParallel && resultDiscarded && !assignsCapturedVar(body, fun, nil)
 
-		if insertTParallel(fun.Body, innerTestVar, scope, needFixLoopVar, mayParallel) && needFixLoopVar {
+		// Reuse the unused tail without overwriting this test's ancestors.
+		if insertTParallel(fun.Body, innerTestVar, scope, needFixLoopVar, mayParallel, stack[len(stack):len(stack)]) && needFixLoopVar {
 			copyLoopVars(stack, fun)
 		}
 
