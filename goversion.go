@@ -191,7 +191,31 @@ func parseGoDirective(src []byte) string {
 // parseModulePath extracts the module path from the `module` line of a
 // go.mod, or returns "" if there is none.
 func parseModulePath(src []byte) string {
-	if args := goModDirective(src, "module"); len(args) == 1 {
+	args := goModDirective(src, "module")
+
+	// The block form: `module (` on one line and the path on the next one.
+	if len(args) == 1 && args[0] == "(" {
+		args = nil
+
+		_, rest, _ := bytes.Cut(src, []byte("module"))
+		_, rest, _ = bytes.Cut(rest, []byte("("))
+
+		for line := range strings.Lines(string(rest)) {
+			if i := strings.Index(line, "//"); i >= 0 {
+				line = line[:i]
+			}
+
+			if fields := strings.Fields(line); len(fields) > 0 {
+				if fields[0] != ")" {
+					args = fields[:1]
+				}
+
+				break
+			}
+		}
+	}
+
+	if len(args) == 1 {
 		return strings.Trim(args[0], `"`)
 	}
 

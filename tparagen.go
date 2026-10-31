@@ -5,7 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -46,6 +49,10 @@ type Options struct {
 	// whose files all need a tag (e.g. //go:build e2e) is matched only when
 	// the tag is given.
 	BuildTags []string
+
+	// Verbose makes the report list every file that was changed or has tests
+	// left sequential, in addition to the summary.
+	Verbose bool
 }
 
 // Run is entry point. It processes every package in and below the current
@@ -55,10 +62,14 @@ type Options struct {
 // (e.g. "1.21"). It decides whether loop variables have to be copied before a
 // parallel subtest, which is needed before Go 1.22. When it is empty, the go
 // directive of the go.mod nearest to each file is used.
-func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion string) error {
+//
+// A summary of the changes is written to outStream; with verbose, also one
+// line for every file that was changed or has tests left sequential.
+func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion string, verbose bool) error {
 	return RunWithOptions(ctx, outStream, errStream, Options{
 		IgnoreDirs:   ignoreDirectories,
 		MinGoVersion: minGoVersion,
+		Verbose:      verbose,
 	})
 }
 
@@ -90,6 +101,7 @@ func RunWithOptions(ctx context.Context, outStream, errStream io.Writer, opts Op
 		errStream:    errStream,
 		ignoreDirs:   ignoreDirs,
 		minGoVersion: opts.MinGoVersion,
+		verbose:      opts.Verbose,
 	}
 
 	return t.run(ctx)
@@ -103,6 +115,7 @@ type tparagen struct {
 	buildTags            []string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
+	verbose              bool
 
 	// minGoVersion overrides the go directive of every go.mod when set.
 	minGoVersion string
@@ -111,56 +124,23 @@ type tparagen struct {
 }
 
 func (t *tparagen) run(ctx context.Context) error {
-	paths, err := t.testFiles(ctx)
+	// The run is read-only until every file has been processed successfully:
+	// files are written only at the end, so a failure half-way leaves every
+	// original untouched.
+	testFiles, helpers, err := t.scan(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Rewritten contents keyed by file path. The run is read-only until every
-	// file has been processed successfully: files are written only at the
-	// end, so a failure half-way leaves every original untouched. The files
-	// are processed concurrently, so sync.Map is used.
-	var changes sync.Map
+	var (
+		// Rewritten contents keyed by file path.
+		changes sync.Map
+		// fileStats of every file where something was done or left
+		// sequential, keyed by file path.
+		stats sync.Map
+	)
 
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(runtime.GOMAXPROCS(0))
-
-	for _, path := range paths {
-		g.Go(func() error {
-			// Abort early on interruption (SIGINT/SIGTERM); nothing has been
-			// written at this point.
-			if err := gctx.Err(); err != nil {
-				return err
-			}
-
-			src, err := os.ReadFile(path)
-			if err != nil {
-				return fmt.Errorf("cannot read %s. %w", path, err)
-			}
-
-			needFix, err := t.needFixLoopVarIn(filepath.Dir(path))
-			if err != nil {
-				return err
-			}
-
-			got, err := GenerateTParallel(path, src, needFix)
-			if err != nil {
-				return fmt.Errorf("error occurred in Process(). %w", err)
-			}
-
-			if !bytes.Equal(src, got) {
-				changes.Store(path, got)
-			}
-
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("interrupted before applying changes: %w", err)
-		}
-
+	if err := t.processTestFiles(ctx, testFiles, helpers, &changes, &stats); err != nil {
 		return err
 	}
 
@@ -172,20 +152,147 @@ func (t *tparagen) run(ctx context.Context) error {
 	// Write every file now that every rewrite succeeded. This phase runs to
 	// completion without checking for cancellation so that the files are not
 	// left in a partially rewritten state.
-	return applyChanges(&changes)
+	if err := applyChanges(&changes); err != nil {
+		return err
+	}
+
+	t.report(&stats, len(testFiles))
+
+	return nil
 }
 
-// testFiles resolves t.patterns with go/packages, like `go test` does, and
-// returns the _test.go files of the matched packages. Only the directories
-// that the patterns select are read: testdata, vendor and directories
-// starting with "." or "_" are skipped, and "./..." stops at nested modules.
+// testFile is a _test.go file to process. Its source is read again when it
+// is processed: holding every source until then would cost as much memory as
+// the test code of the whole tree.
+type testFile struct {
+	path string
+}
+
+// scan returns the _test.go files of the packages matched by t.patterns. It
+// also indexes the helper functions, in any .go file of those packages or of
+// the vendor directories of their modules that imports testing, that call
+// t.Setenv or t.Chdir on the testing value they are given.
+func (t *tparagen) scan(ctx context.Context) ([]testFile, *helperIndex, error) {
+	dirs, err := t.packageDirs(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Vendored packages are not matched by ./..., but tests can call their
+	// helpers.
+	vendorDirs, err := t.vendorDirs(dirs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	type scanDir struct {
+		path string
+		// helpersOnly is set for a vendored package: its test files are not
+		// ours to rewrite.
+		helpersOnly bool
+	}
+
+	all := make([]scanDir, 0, len(dirs)+len(vendorDirs))
+	for _, dir := range dirs {
+		all = append(all, scanDir{path: dir})
+	}
+
+	for _, dir := range vendorDirs {
+		all = append(all, scanDir{path: dir, helpersOnly: true})
+	}
+
+	var (
+		mu        sync.Mutex
+		testFiles []testFile
+		builder   helperIndexBuilder
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(runtime.GOMAXPROCS(0))
+
+	for _, sd := range all {
+		dir := sd.path
+
+		g.Go(func() error {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return fmt.Errorf("cannot read %s. %w", dir, err)
+			}
+
+			importPath := t.importPath(dir)
+
+			for _, e := range entries {
+				// Abort the scan early on interruption (SIGINT/SIGTERM);
+				// nothing has been written at this point.
+				if err := gctx.Err(); err != nil {
+					return err
+				}
+
+				if !e.Type().IsRegular() || filepath.Ext(e.Name()) != ".go" {
+					continue
+				}
+
+				path := filepath.Join(dir, e.Name())
+
+				src, err := os.ReadFile(path)
+				if err != nil {
+					return fmt.Errorf("cannot read %s. %w", path, err)
+				}
+
+				if strings.HasSuffix(e.Name(), "_test.go") {
+					if sd.helpersOnly {
+						continue
+					}
+
+					mu.Lock()
+					testFiles = append(testFiles, testFile{path: path})
+					mu.Unlock()
+				}
+
+				// Only a file importing testing can declare a helper taking a
+				// *testing.T, and most test files declare no function other
+				// than their tests: parsing them only to find that out would
+				// double the parsing work of the run.
+				if !bytes.Contains(src, []byte(`"testing"`)) || !mayDeclareHelper(src) {
+					continue
+				}
+
+				f, err := parser.ParseFile(token.NewFileSet(), path, src, parser.SkipObjectResolution)
+				if err != nil {
+					// A test file that does not parse is reported when it is
+					// processed; any other file is not ours to complain about.
+					continue
+				}
+
+				builder.addFile(path, f, importPath)
+			}
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, nil, fmt.Errorf("interrupted before applying changes: %w", err)
+		}
+
+		return nil, nil, err
+	}
+
+	return testFiles, builder.build(), nil
+}
+
+// packageDirs resolves t.patterns with go/packages, like `go test` does, and
+// returns the directories of the matched packages. Only the directories that
+// the patterns select are read: testdata, vendor and directories starting
+// with "." or "_" are skipped, and "./..." stops at nested modules.
 //
 // The packages are only located, not loaded with their tests: go list cannot
 // skip resolving imports (-find) when it lists tests, which makes it much
-// slower. The _test.go files are read from each package directory instead,
-// so test files excluded by build constraints (e.g. //go:build integration)
-// are processed as well, whatever tags they need.
-func (t *tparagen) testFiles(ctx context.Context) ([]string, error) {
+// slower. Every .go file of a package directory is read instead, so test
+// files excluded by build constraints (e.g. //go:build integration) are
+// processed as well, whatever tags they need.
+func (t *tparagen) packageDirs(ctx context.Context) ([]string, error) {
 	cfg := &packages.Config{
 		Context: ctx,
 		Mode:    packages.NeedName | packages.NeedFiles,
@@ -215,7 +322,7 @@ func (t *tparagen) testFiles(ctx context.Context) ([]string, error) {
 	}
 
 	var (
-		paths   []string
+		dirs    []string
 		seen    = map[string]bool{}
 		loadErr []error
 	)
@@ -238,24 +345,59 @@ func (t *tparagen) testFiles(ctx context.Context) ([]string, error) {
 		}
 
 		seen[pkg.Dir] = true
-
-		entries, err := os.ReadDir(pkg.Dir)
-		if err != nil {
-			return nil, fmt.Errorf("cannot read %s. %w", pkg.Dir, err)
-		}
-
-		for _, e := range entries {
-			if e.Type().IsRegular() && strings.HasSuffix(e.Name(), "_test.go") {
-				paths = append(paths, filepath.Join(pkg.Dir, e.Name()))
-			}
-		}
+		dirs = append(dirs, pkg.Dir)
 	}
 
 	if len(loadErr) > 0 {
 		return nil, fmt.Errorf("cannot load packages. %w", errors.Join(loadErr...))
 	}
 
-	return paths, nil
+	return dirs, nil
+}
+
+// vendorDirs returns the package directories below the vendor directories of
+// the modules that contain dirs.
+func (t *tparagen) vendorDirs(dirs []string) ([]string, error) {
+	var (
+		vendorDirs []string
+		seen       = map[string]bool{}
+	)
+
+	for _, dir := range dirs {
+		mod, err := t.modules.find(dir)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read go.mod. %w", err)
+		}
+
+		if mod == nil || seen[mod.dir] {
+			continue
+		}
+
+		seen[mod.dir] = true
+
+		root := filepath.Join(mod.dir, "vendor")
+
+		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if errors.Is(err, fs.ErrNotExist) && path == root {
+				return filepath.SkipDir
+			}
+
+			if err != nil {
+				return err
+			}
+
+			if d.IsDir() {
+				vendorDirs = append(vendorDirs, path)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("cannot read %s. %w", root, err)
+		}
+	}
+
+	return vendorDirs, nil
 }
 
 // ignored reports whether dir is, or is in, a directory named by
@@ -273,6 +415,198 @@ func (t *tparagen) ignored(baseDir, dir string) bool {
 	}
 
 	return false
+}
+
+// importPath returns the import path of the package in dir, or "" if dir is
+// not in a module.
+func (t *tparagen) importPath(dir string) string {
+	mod, err := t.modules.find(dir)
+	if err != nil || mod == nil || mod.path == "" {
+		return ""
+	}
+
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+
+	rel, err := filepath.Rel(mod.dir, abs)
+	if err != nil {
+		return ""
+	}
+
+	if rel == "." {
+		return mod.path
+	}
+
+	rel = filepath.ToSlash(rel)
+
+	// A vendored package is imported by its own path, not by its directory.
+	if i := strings.LastIndex("/"+rel, "/vendor/"); i >= 0 {
+		return rel[i+len("vendor/"):]
+	}
+
+	return mod.path + "/" + rel
+}
+
+// processTestFiles rewrites files concurrently and stores the contents that
+// changed in changes and what was done in stats, keyed by file path. It stops
+// at the first error.
+func (t *tparagen) processTestFiles(ctx context.Context, files []testFile, helpers *helperIndex, changes, stats *sync.Map) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+
+	var (
+		wg   sync.WaitGroup
+		jobs = make(chan testFile)
+	)
+
+	for range runtime.GOMAXPROCS(0) {
+		wg.Go(func() {
+			for file := range jobs {
+				if err := t.processTestFile(file, helpers, changes, stats); err != nil {
+					cancel(err)
+				}
+			}
+		})
+	}
+
+	for _, file := range files {
+		if ctx.Err() != nil {
+			break
+		}
+
+		jobs <- file
+	}
+
+	close(jobs)
+	wg.Wait()
+
+	if err := context.Cause(ctx); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("interrupted before applying changes: %w", err)
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// processTestFile rewrites one file and stores its new content in changes if
+// it changed, and what was done in stats.
+func (t *tparagen) processTestFile(file testFile, helpers *helperIndex, changes, stats *sync.Map) error {
+	needFix, err := t.needFixLoopVarIn(filepath.Dir(file.path))
+	if err != nil {
+		return err
+	}
+
+	src, err := os.ReadFile(file.path)
+	if err != nil {
+		return fmt.Errorf("cannot read %s. %w", file.path, err)
+	}
+
+	got, s, err := generateTParallel(file.path, src, needFix, helpers)
+	if err != nil {
+		return fmt.Errorf("error occurred in Process(). %w", err)
+	}
+
+	if !bytes.Equal(src, got) {
+		s.rewritten = true
+
+		changes.Store(file.path, got)
+	}
+
+	if s != (fileStats{}) {
+		stats.Store(file.path, s)
+	}
+
+	return nil
+}
+
+// report writes a summary of the run to outStream. One line per file would
+// drown the summary in a large repository, so per-file lines are written only
+// with verbose.
+func (t *tparagen) report(stats *sync.Map, scanned int) {
+	var (
+		paths   []string
+		total   fileStats
+		updated int
+	)
+
+	stats.Range(func(key, value any) bool {
+		path, _ := key.(string)
+		s, _ := value.(fileStats)
+
+		paths = append(paths, path)
+		total.add(s)
+
+		if s.rewritten {
+			updated++
+		}
+
+		return true
+	})
+
+	slices.Sort(paths)
+
+	if t.verbose {
+		for _, path := range paths {
+			v, _ := stats.Load(path)
+			s, _ := v.(fileStats)
+			fmt.Fprintf(t.outStream, "%s: %s\n", filepath.Clean(path), describeStats(s))
+		}
+	}
+
+	if updated == 0 {
+		fmt.Fprintf(t.outStream, "No changes in %s\n", plural(scanned, "test file", "test files"))
+	} else {
+		fmt.Fprintf(t.outStream, "Updated %d of %s: %s\n", updated, plural(scanned, "test file", "test files"),
+			describeStats(fileStats{parallel: total.parallel, loopVarCopies: total.loopVarCopies, rewritten: true}))
+	}
+
+	if total.sequential > 0 {
+		hint := ""
+		if !t.verbose {
+			hint = " Run with -v to see the files."
+		}
+
+		fmt.Fprintf(t.outStream, "%s left sequential: t.Parallel() is not safe there (t.Setenv, global state, ...).%s\n",
+			plural(total.sequential, "test", "tests"), hint)
+	}
+}
+
+// describeStats describes the non-zero counts of s, e.g.
+// "3 t.Parallel() added, 1 loop variable copied".
+func describeStats(s fileStats) string {
+	var parts []string
+
+	if s.parallel > 0 {
+		parts = append(parts, fmt.Sprintf("%d t.Parallel() added", s.parallel))
+	}
+
+	if s.loopVarCopies > 0 {
+		parts = append(parts, plural(s.loopVarCopies, "loop variable", "loop variables")+" copied")
+	}
+
+	if s.sequential > 0 {
+		parts = append(parts, plural(s.sequential, "test", "tests")+" left sequential")
+	}
+
+	if len(parts) == 0 && s.rewritten {
+		parts = append(parts, "reformatted by gofmt")
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// plural formats n with the singular or the plural form of a noun.
+func plural(n int, singular, pluralForm string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, singular)
+	}
+
+	return fmt.Sprintf("%d %s", n, pluralForm)
 }
 
 // writeTempFile writes content to a new temporary file next to path, with the
