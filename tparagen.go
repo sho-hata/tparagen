@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
@@ -29,7 +30,10 @@ const (
 // (e.g. "1.21"). It decides whether loop variables have to be copied before a
 // parallel subtest, which is needed before Go 1.22. When it is empty, the go
 // directive of the go.mod nearest to each file is used.
-func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion string) error {
+//
+// A summary of the changes is written to outStream; with verbose, also one
+// line for every file that was changed or has tests left sequential.
+func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories []string, minGoVersion string, verbose bool) error {
 	ignoreDirs := []string{defaultIgnoreDir}
 	if len(ignoreDirs) != 0 {
 		ignoreDirs = append(ignoreDirs, ignoreDirectories...)
@@ -49,6 +53,7 @@ func Run(ctx context.Context, outStream, errStream io.Writer, ignoreDirectories 
 		errStream:    errStream,
 		ignoreDirs:   ignoreDirs,
 		minGoVersion: minGoVersion,
+		verbose:      verbose,
 	}
 
 	return t.run(ctx)
@@ -58,6 +63,7 @@ type tparagen struct {
 	in, dest             string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
+	verbose              bool
 
 	// minGoVersion overrides the go directive of every go.mod when set.
 	minGoVersion string
@@ -76,9 +82,12 @@ func (t *tparagen) run(ctx context.Context) error {
 	}
 
 	// Rewritten contents keyed by file path.
-	var changes sync.Map
+	var (
+		changes sync.Map
+		stats   sync.Map
+	)
 
-	if err := t.processTestFiles(ctx, testFiles, helpers, &changes); err != nil {
+	if err := t.processTestFiles(ctx, testFiles, helpers, &changes, &stats); err != nil {
 		return err
 	}
 
@@ -90,7 +99,13 @@ func (t *tparagen) run(ctx context.Context) error {
 	// Write every file now that every rewrite succeeded. This phase runs to
 	// completion without checking for cancellation so that the files are not
 	// left in a partially rewritten state.
-	return applyChanges(&changes)
+	if err := applyChanges(&changes); err != nil {
+		return err
+	}
+
+	t.report(&stats, len(testFiles))
+
+	return nil
 }
 
 // testFile is a _test.go file to process.
@@ -193,7 +208,7 @@ func (t *tparagen) importPath(dir string) string {
 
 // processTestFiles rewrites files concurrently and stores the contents that
 // changed in changes, keyed by file path. It stops at the first error.
-func (t *tparagen) processTestFiles(ctx context.Context, files []testFile, helpers *helperIndex, changes *sync.Map) error {
+func (t *tparagen) processTestFiles(ctx context.Context, files []testFile, helpers *helperIndex, changes, stats *sync.Map) error {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
@@ -205,7 +220,7 @@ func (t *tparagen) processTestFiles(ctx context.Context, files []testFile, helpe
 	for range runtime.GOMAXPROCS(0) {
 		wg.Go(func() {
 			for file := range jobs {
-				if err := t.processTestFile(file, helpers, changes); err != nil {
+				if err := t.processTestFile(file, helpers, changes, stats); err != nil {
 					cancel(err)
 				}
 			}
@@ -236,22 +251,112 @@ func (t *tparagen) processTestFiles(ctx context.Context, files []testFile, helpe
 
 // processTestFile rewrites one file and stores its new content in changes if
 // it changed.
-func (t *tparagen) processTestFile(file testFile, helpers *helperIndex, changes *sync.Map) error {
+func (t *tparagen) processTestFile(file testFile, helpers *helperIndex, changes, stats *sync.Map) error {
 	needFix, err := t.needFixLoopVarIn(filepath.Dir(file.path))
 	if err != nil {
 		return err
 	}
 
-	got, err := generateTParallel(file.path, file.src, needFix, helpers)
+	got, s, err := generateTParallel(file.path, file.src, needFix, helpers)
 	if err != nil {
 		return fmt.Errorf("error occurred in Process(). %w", err)
 	}
 
 	if !bytes.Equal(file.src, got) {
+		s.rewritten = true
 		changes.Store(file.path, got)
 	}
 
+	if s != (fileStats{}) {
+		stats.Store(file.path, s)
+	}
+
 	return nil
+}
+
+// report writes a summary of the run to outStream. One line per file would
+// drown the summary in a large repository, so per-file lines are written only
+// with verbose.
+func (t *tparagen) report(stats *sync.Map, scanned int) {
+	var (
+		paths   []string
+		total   fileStats
+		updated int
+	)
+
+	stats.Range(func(key, value any) bool {
+		path, _ := key.(string)
+		s, _ := value.(fileStats)
+
+		paths = append(paths, path)
+		total.add(s)
+
+		if s.rewritten {
+			updated++
+		}
+
+		return true
+	})
+
+	slices.Sort(paths)
+
+	if t.verbose {
+		for _, path := range paths {
+			v, _ := stats.Load(path)
+			s, _ := v.(fileStats)
+			fmt.Fprintf(t.outStream, "%s: %s\n", filepath.Clean(path), describeStats(s))
+		}
+	}
+
+	if updated == 0 {
+		fmt.Fprintf(t.outStream, "No changes in %s\n", plural(scanned, "test file", "test files"))
+	} else {
+		fmt.Fprintf(t.outStream, "Updated %d of %s: %s\n", updated, plural(scanned, "test file", "test files"),
+			describeStats(fileStats{parallel: total.parallel, loopVarCopies: total.loopVarCopies, rewritten: true}))
+	}
+
+	if total.sequential > 0 {
+		hint := ""
+		if !t.verbose {
+			hint = " Run with -v to see the files."
+		}
+
+		fmt.Fprintf(t.outStream, "%s left sequential: t.Parallel() is not safe there (t.Setenv, global state, ...).%s\n",
+			plural(total.sequential, "test", "tests"), hint)
+	}
+}
+
+// describeStats describes the non-zero counts of s, e.g.
+// "3 t.Parallel() added, 1 loop variable copied".
+func describeStats(s fileStats) string {
+	var parts []string
+
+	if s.parallel > 0 {
+		parts = append(parts, fmt.Sprintf("%d t.Parallel() added", s.parallel))
+	}
+
+	if s.loopVarCopies > 0 {
+		parts = append(parts, plural(s.loopVarCopies, "loop variable", "loop variables")+" copied")
+	}
+
+	if s.sequential > 0 {
+		parts = append(parts, plural(s.sequential, "test", "tests")+" left sequential")
+	}
+
+	if len(parts) == 0 && s.rewritten {
+		parts = append(parts, "reformatted by gofmt")
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// plural formats n with the singular or the plural form of a noun.
+func plural(n int, singular, pluralForm string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, singular)
+	}
+
+	return fmt.Sprintf("%d %s", n, pluralForm)
 }
 
 // writeTempFile writes content to a new temporary file next to path, with the
