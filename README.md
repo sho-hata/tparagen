@@ -78,7 +78,7 @@ func SampleTest(t *testing.T) {
 }
 ```
 
-When the target code is written for a Go version earlier than 1.22, where the loop variable is shared between iterations (see: https://go.dev/blog/loopvar-preview), code to copy the loop variable is inserted as well. The version is taken from the `go` directive of the nearest `go.mod`; use `--min-go-version` to override it.
+When the target code is written for a Go version earlier than 1.22, where the loop variable is shared between iterations (see: https://go.dev/blog/loopvar-preview), code to copy the loop variable is inserted as well. The version is taken from the `go` directive of the `go.mod` nearest to each file, so every module of a multi-module repository uses its own version; use `--min-go-version` to override it.
 
 ```go
 package test
@@ -108,7 +108,7 @@ func SampleTest(t *testing.T) {
 ### The following cases are supported
 - [x] Insert RunParallel helper function into the main/sub test function.
 - [x] Subtests started anywhere in a test: in range or three-clause for loops, in if/switch blocks, and inside other subtests.
-- [x] Copy loop variables (`tc := tc`) before parallel subtests when the target Go version is earlier than 1.22 (detected from `go.mod`, or `--min-go-version`)
+- [x] Copy loop variables (`tc := tc`) before parallel subtests when the target Go version is earlier than 1.22 (detected from the `go.mod` of each module, or `--min-go-version`)
 - [x] Do not insert if `t.Setenv()`, `t.Chdir()` (Go 1.24+) or `cryptotest.SetGlobalRandom()` (Go 1.26+) is called in the test function or in any of its subtests. Those calls panic when the test or one of its ancestors is parallel.
 - [x] Do not insert if the test function or any of its subtests changes global state: calls `os.Setenv`/`os.Unsetenv`/`os.Clearenv`/`os.Chdir`, `log.SetOutput`/`log.SetFlags`/`log.SetPrefix` or `slog.SetDefault`/`slog.SetLogLoggerLevel`, or assigns to a package-level variable (of any package), or a field or element of one.
 - [x] Ignore specified directories with cli option -i/-ignore
@@ -151,9 +151,9 @@ Flags:
                        directory is always ignored.)
       --min-go-version=MIN-GO-VERSION
                        minimum go version of the target code. ex: 1.21 (default:
-                       the go directive of the nearest go.mod. Loop variables
-                       are copied before parallel subtests when it is older than
-                       1.22.)
+                       the go directive of the go.mod nearest to each file.
+                       Loop variables are copied before parallel subtests when
+                       it is older than 1.22.)
 
 ```
 ## Installation
