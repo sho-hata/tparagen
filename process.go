@@ -313,7 +313,7 @@ func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
 
 // isTestName reports whether name is the name of a test function as `go test`
 // sees it: Test, or Test followed by a character that is not a lower-case
-// letter. Testable or Testify are not tests.
+// letter. Testable or Testing are not tests.
 func isTestName(name string) bool {
 	rest, ok := strings.CutPrefix(name, testPrefix)
 	if !ok {
