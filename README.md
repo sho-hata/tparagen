@@ -1,5 +1,5 @@
 # tparagen
-tparagen inserts the `T.Parallel()` method from the testing package into a test function in a specific source file or an entire directory.
+tparagen inserts the `T.Parallel()` method from the testing package into the test functions of the packages you specify, such as `./...`.
 
 [![ci](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml/badge.svg)](https://github.com/sho-hata/tparagen/actions/workflows/ci.yml)
 
@@ -28,7 +28,7 @@ If there is your application in production already, you must add a `T.Parallel()
 ![demo](/doc/tparagen.gif)
 
 ## Description
-tparagen is cli tool for insert the `T.Parallel()` method from the testing package into all main/sub test in specified directory.
+tparagen is cli tool for insert the `T.Parallel()` method from the testing package into all main/sub test in the specified packages.
 
 Before code is below,
 
@@ -78,7 +78,7 @@ func SampleTest(t *testing.T) {
 }
 ```
 
-When the target code is written for a Go version earlier than 1.22, where the loop variable is shared between iterations (see: https://go.dev/blog/loopvar-preview), code to copy the loop variable is inserted as well. The version is taken from the `go` directive of the `go.mod` nearest to each file, so every module of a multi-module repository uses its own version; use `--min-go-version` to override it.
+When the target code is written for a Go version earlier than 1.22, where the loop variable is shared between iterations (see: https://go.dev/blog/loopvar-preview), code to copy the loop variable is inserted as well. The version is taken from the `go` directive of the `go.mod` nearest to each file, so every module of a workspace uses its own version; use `--min-go-version` to override it.
 
 ```go
 package test
@@ -111,7 +111,9 @@ func SampleTest(t *testing.T) {
 - [x] Copy loop variables (`tc := tc`) before parallel subtests when the target Go version is earlier than 1.22 (detected from the `go.mod` of each module, or `--min-go-version`)
 - [x] Do not insert if `t.Setenv()`, `t.Chdir()` (Go 1.24+) or `cryptotest.SetGlobalRandom()` (Go 1.26+) is called in the test function or in any of its subtests. Those calls panic when the test or one of its ancestors is parallel.
 - [x] Do not insert if the test function or any of its subtests changes global state: calls `os.Setenv`/`os.Unsetenv`/`os.Clearenv`/`os.Chdir`, `log.SetOutput`/`log.SetFlags`/`log.SetPrefix` or `slog.SetDefault`/`slog.SetLogLoggerLevel`, or assigns to a package-level variable (of any package), or a field or element of one.
-- [x] Ignore specified directories with cli option -i/-ignore
+- [x] Select the packages to process with the patterns the go command accepts (`./...`, `./foo/...`, `example.com/m/bar`). They are resolved with [go/packages](https://pkg.go.dev/golang.org/x/tools/go/packages) like `go test` and golangci-lint do, so only the selected directories are read: `testdata`, `vendor` and directories starting with `.` or `_` are skipped, and `./...` stops at nested modules.
+- [x] Test files excluded by build constraints (e.g. `//go:build integration`) are processed as well when their package is selected. A directory whose files all need a tag is selected only when the tag is given with `--tags`.
+- [x] Ignore specified directories with cli option --ignore
 - [x] nolint comment support: parallel,paralleltest
 - [x] Only functions that `go test` runs as tests are rewritten. Methods such as `func (s) TestX(t *testing.T)` are left alone: they are run by suite runners that may set up and check process-wide state around every test. So are functions such as `Testable`, which `go test` does not treat as tests.
 
@@ -135,13 +137,17 @@ func TestX(t *testing.T) {
 
 ## Synopsis
 ```
-$ tparagen
+$ tparagen                      # every package in and below the current directory (./...)
+$ tparagen ./foo/... ./bar      # only the given packages
+$ tparagen --tags e2e ./...     # also directories whose files all need the e2e tag
 ```
+
+A pattern that matches no package is an error. `./...` does not cross into nested modules, like for the go command: run tparagen in each module, or list the modules in a `go.work` and give their patterns (`tparagen ./... ./tools/...`). tparagen must run inside a module (or a workspace).
 
 ## Options
 ```
 $ tparagen --help
-usage: tparagen [<flags>]
+usage: tparagen [<flags>] [<packages>...]
 
 
 Flags:
@@ -149,11 +155,20 @@ Flags:
                        --help-man).
       --ignore=IGNORE  ignore directory names. ex: foo,bar,baz (testdata
                        directory is always ignored.)
+      --tags=TAGS      build tags to resolve the packages with, as go build
+                       -tags. ex: integration,e2e (test files excluded by build
+                       constraints are processed anyway when their package
+                       is matched; a directory whose files all need a tag is
+                       matched only with it.)
       --min-go-version=MIN-GO-VERSION
                        minimum go version of the target code. ex: 1.21 (default:
                        the go directive of the go.mod nearest to each file.
                        Loop variables are copied before parallel subtests when
                        it is older than 1.22.)
+
+Args:
+  [<packages>]  packages to process, in the form the go command accepts. ex:
+                ./... ./foo/... example.com/m/bar (default: ./...)
 
 ```
 ## Installation
