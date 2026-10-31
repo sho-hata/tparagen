@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -211,6 +212,61 @@ func TestRunLeavesAllFilesUntouchedWhenOneCannotBeWritten(t *testing.T) {
 
 		if len(entries) != 1 {
 			t.Errorf("temporary files left behind in %s: %d entries", dir, len(entries))
+		}
+	}
+}
+
+// Every module of a multi-module repository is processed with the Go version
+// of its own go.mod: loop variables are copied only in the module that is
+// older than Go 1.22.
+func TestRunUsesTheGoVersionOfEachModule(t *testing.T) {
+	t.Parallel()
+
+	const src = `package t
+
+import "testing"
+
+func TestFoo(t *testing.T) {
+	for _, tc := range []string{"a"} {
+		t.Run(tc, func(t *testing.T) {
+			_ = tc
+		})
+	}
+}
+`
+
+	root := t.TempDir()
+
+	files := map[string]string{
+		"go.mod":            "module m\n\ngo 1.22\n",
+		"new/foo_test.go":   src,
+		"old/go.mod":        "module m/old\n\ngo 1.21\n",
+		"old/a/foo_test.go": src,
+	}
+
+	for name, content := range files {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := newRunner(root).run(context.Background()); err != nil {
+		t.Fatalf("run() returned error: %v", err)
+	}
+
+	for name, wantCopy := range map[string]bool{"new/foo_test.go": false, "old/a/foo_test.go": true} {
+		got, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if hasCopy := strings.Contains(string(got), "tc := tc"); hasCopy != wantCopy {
+			t.Errorf("%s: loop variable copied = %v, want %v\n%s", name, hasCopy, wantCopy, got)
 		}
 	}
 }
