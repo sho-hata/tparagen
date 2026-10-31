@@ -5,14 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/saracen/walker"
 )
@@ -70,81 +72,28 @@ type tparagen struct {
 }
 
 func (t *tparagen) run(ctx context.Context) error {
-	// Rewritten contents keyed by file path. The walk itself is read-only:
-	// files are written only after every file has been processed successfully,
-	// so a failure half-way leaves every original untouched. Creating files
-	// inside the directories being walked would also disturb the concurrent
-	// directory listing. walker.Walk() may execute concurrently, so sync.Map
-	// is used.
+	// The run is read-only until every file has been processed successfully:
+	// files are written only at the end, so a failure half-way leaves every
+	// original untouched. Creating files inside the directories being walked
+	// would also disturb the concurrent directory listing.
+	testFiles, helpers, err := t.scan(ctx)
+	if err != nil {
+		return err
+	}
+
 	var (
+		// Rewritten contents keyed by file path.
 		changes sync.Map
 		// fileStats of every file where something was done or left
 		// sequential, keyed by file path.
 		stats sync.Map
-		// Number of test files read.
-		scanned atomic.Int64
 	)
 
-	if err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
-		// Abort the scan early on interruption (SIGINT/SIGTERM); nothing has
-		// been written at this point.
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-
-		if info.IsDir() && t.skipDir(path) {
-			return filepath.SkipDir
-		}
-
-		if info.IsDir() {
-			return nil
-		}
-
-		if filepath.Ext(path) != ".go" {
-			return nil
-		}
-
-		if !strings.HasSuffix(filepath.Base(path), "_test.go") {
-			return nil
-		}
-
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("cannot read %s. %w", path, err)
-		}
-
-		scanned.Add(1)
-
-		needFix, err := t.needFixLoopVarIn(filepath.Dir(path))
-		if err != nil {
-			return err
-		}
-
-		got, s, err := generateTParallel(path, src, needFix)
-		if err != nil {
-			return fmt.Errorf("error occurred in Process(). %w", err)
-		}
-
-		if !bytes.Equal(src, got) {
-			s.rewritten = true
-
-			changes.Store(path, got)
-		}
-
-		if s != (fileStats{}) {
-			stats.Store(path, s)
-		}
-
-		return nil
-	}); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("interrupted before applying changes: %w", err)
-		}
-
-		return fmt.Errorf("error occurred in walker.Walk(). %w", err)
+	if err := t.processTestFiles(ctx, testFiles, helpers, &changes, &stats); err != nil {
+		return err
 	}
 
-	// Do not begin the write phase if we were interrupted during the scan.
+	// Do not begin the write phase if we were interrupted.
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("interrupted before applying changes: %w", err)
 	}
@@ -156,7 +105,190 @@ func (t *tparagen) run(ctx context.Context) error {
 		return err
 	}
 
-	t.report(&stats, int(scanned.Load()))
+	t.report(&stats, len(testFiles))
+
+	return nil
+}
+
+// testFile is a _test.go file to process. Its source is read again when it
+// is processed: holding every source until then would cost as much memory as
+// the test code of the whole tree.
+type testFile struct {
+	path string
+}
+
+// scan walks t.in and returns the _test.go files to process. It also indexes
+// the helper functions, in any .go file of the tree that imports testing,
+// that call t.Setenv or t.Chdir on the testing value they are given.
+func (t *tparagen) scan(ctx context.Context) ([]testFile, *helperIndex, error) {
+	var (
+		mu        sync.Mutex
+		testFiles []testFile
+		builder   helperIndexBuilder
+	)
+
+	// walker.Walk() may execute concurrently.
+	err := walker.Walk(t.in, func(path string, info fs.FileInfo) error {
+		// Abort the scan early on interruption (SIGINT/SIGTERM); nothing has
+		// been written at this point.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		if info.IsDir() && t.skipDir(path) {
+			return filepath.SkipDir
+		}
+
+		if info.IsDir() || filepath.Ext(path) != ".go" {
+			return nil
+		}
+
+		isTest := strings.HasSuffix(filepath.Base(path), "_test.go")
+
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("cannot read %s. %w", path, err)
+		}
+
+		if isTest {
+			mu.Lock()
+			testFiles = append(testFiles, testFile{path: path})
+			mu.Unlock()
+		}
+
+		// Only a file importing testing can declare a helper taking a
+		// *testing.T, and most test files declare no function other than
+		// their tests: parsing them only to find that out would double the
+		// parsing work of the run.
+		if !bytes.Contains(src, []byte(`"testing"`)) || !mayDeclareHelper(src) {
+			return nil
+		}
+
+		f, err := parser.ParseFile(token.NewFileSet(), path, src, parser.SkipObjectResolution)
+		if err != nil {
+			// A test file that does not parse is reported when it is
+			// processed; any other file is not ours to complain about.
+			return nil
+		}
+
+		builder.addFile(path, f, t.importPath(filepath.Dir(path)))
+
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, nil, fmt.Errorf("interrupted before applying changes: %w", err)
+		}
+
+		return nil, nil, fmt.Errorf("error occurred in walker.Walk(). %w", err)
+	}
+
+	return testFiles, builder.build(), nil
+}
+
+// importPath returns the import path of the package in dir, or "" if dir is
+// not in a module.
+func (t *tparagen) importPath(dir string) string {
+	mod, err := t.modules.find(dir)
+	if err != nil || mod == nil || mod.path == "" {
+		return ""
+	}
+
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+
+	rel, err := filepath.Rel(mod.dir, abs)
+	if err != nil {
+		return ""
+	}
+
+	if rel == "." {
+		return mod.path
+	}
+
+	rel = filepath.ToSlash(rel)
+
+	// A vendored package is imported by its own path, not by its directory.
+	if i := strings.LastIndex("/"+rel, "/vendor/"); i >= 0 {
+		return rel[i+len("vendor/"):]
+	}
+
+	return mod.path + "/" + rel
+}
+
+// processTestFiles rewrites files concurrently and stores the contents that
+// changed in changes and what was done in stats, keyed by file path. It stops
+// at the first error.
+func (t *tparagen) processTestFiles(ctx context.Context, files []testFile, helpers *helperIndex, changes, stats *sync.Map) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+
+	var (
+		wg   sync.WaitGroup
+		jobs = make(chan testFile)
+	)
+
+	for range runtime.GOMAXPROCS(0) {
+		wg.Go(func() {
+			for file := range jobs {
+				if err := t.processTestFile(file, helpers, changes, stats); err != nil {
+					cancel(err)
+				}
+			}
+		})
+	}
+
+	for _, file := range files {
+		if ctx.Err() != nil {
+			break
+		}
+
+		jobs <- file
+	}
+
+	close(jobs)
+	wg.Wait()
+
+	if err := context.Cause(ctx); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("interrupted before applying changes: %w", err)
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// processTestFile rewrites one file and stores its new content in changes if
+// it changed, and what was done in stats.
+func (t *tparagen) processTestFile(file testFile, helpers *helperIndex, changes, stats *sync.Map) error {
+	needFix, err := t.needFixLoopVarIn(filepath.Dir(file.path))
+	if err != nil {
+		return err
+	}
+
+	src, err := os.ReadFile(file.path)
+	if err != nil {
+		return fmt.Errorf("cannot read %s. %w", file.path, err)
+	}
+
+	got, s, err := generateTParallel(file.path, src, needFix, helpers)
+	if err != nil {
+		return fmt.Errorf("error occurred in Process(). %w", err)
+	}
+
+	if !bytes.Equal(src, got) {
+		s.rewritten = true
+
+		changes.Store(file.path, got)
+	}
+
+	if s != (fileStats{}) {
+		stats.Store(file.path, s)
+	}
 
 	return nil
 }

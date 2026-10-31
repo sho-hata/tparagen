@@ -110,6 +110,7 @@ func SampleTest(t *testing.T) {
 - [x] Subtests started anywhere in a test: in range or three-clause for loops, in if/switch blocks, and inside other subtests.
 - [x] Copy loop variables (`tc := tc`) before parallel subtests when the target Go version is earlier than 1.22 (detected from the `go.mod` of each module, or `--min-go-version`)
 - [x] Do not insert if `t.Setenv()`, `t.Chdir()` (Go 1.24+) or `cryptotest.SetGlobalRandom()` (Go 1.26+) is called in the test function or in any of its subtests. Those calls panic when the test or one of its ancestors is parallel.
+- [x] The same applies when the test hands its `*testing.T` to a helper that makes those calls, directly or through other helpers: a function or method of the same package, a function of another package in the processed tree (such as `testutil.Mktmp(t)`), or a closure declared in the test (`doTest := func(tb testing.TB) {...}`). Helpers taking `testing.TB`, `*testing.B` or `*testing.F` count too.
 - [x] Do not insert if the test function or any of its subtests changes global state: calls `os.Setenv`/`os.Unsetenv`/`os.Clearenv`/`os.Chdir`, `log.SetOutput`/`log.SetFlags`/`log.SetPrefix` or `slog.SetDefault`/`slog.SetLogLoggerLevel`, or assigns to a package-level variable (of any package), or a field or element of one.
 - [x] Keep a subtest sequential if it uses a variable that the function starting it hands to a `defer` statement, such as `srv` in `defer srv.Close()` or `ctx` in `ctx, cancel := context.WithCancel(ctx); defer cancel()`. Parallel subtests only start after that function has returned and its deferred calls have run. Use `t.Cleanup` instead to let them run in parallel.
 - [x] Ignore specified directories with cli option -i/-ignore
@@ -117,7 +118,8 @@ func SampleTest(t *testing.T) {
 - [x] Only functions that `go test` runs as tests are rewritten. Methods such as `func (s) TestX(t *testing.T)` are left alone: they are run by suite runners that may set up and check process-wide state around every test. So are functions such as `Testable`, which `go test` does not treat as tests.
 
 ### The following cases are not supported
-- Don't insert if the test function calls another function that calls `Setenv()`.
+- Don't insert if the test function calls a helper that calls `Setenv()` when the helper is declared outside the processed directory (run tparagen from the module root), or is called through a function value or an interface.
+- Don't insert if a helper reaches `Setenv()` on a copy of its parameter (`t := tb; t.Setenv(...)`) or on a stored field (`f.t.Setenv(...)`) instead of the parameter itself.
 - Don't insert if the test function calls another function that changes global state.
 
 ### Caveat: global state

@@ -160,6 +160,8 @@ func TestParseModulePath(t *testing.T) {
 		{name: "plain", src: "module example.com/m\n\ngo 1.21\n", want: "example.com/m"},
 		{name: "quoted with comment", src: "module \"example.com/m\" // c\n", want: "example.com/m"},
 		{name: "commented out", src: "// module example.com/m\n", want: ""},
+		{name: "block", src: "module (\n\t// c\n\texample.com/m\n)\n\ngo 1.21\n", want: "example.com/m"},
+		{name: "empty block", src: "module (\n)\n", want: ""},
 	}
 
 	for _, tt := range tests {
