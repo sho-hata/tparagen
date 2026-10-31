@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -259,10 +260,19 @@ func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) {
 	}
 }
 
-// Checks if the function has the param type *testing.T; if it does, then the
+// Checks if the function is one that `go test` runs as a test: a top-level
+// function named TestXxx with a single *testing.T parameter. If it is, the
 // parameter name is returned, too.
 func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
-	if !strings.HasPrefix(funcDecl.Name.Name, testPrefix) {
+	if !isTestName(funcDecl.Name.Name) {
+		return false, ""
+	}
+
+	// `go test` never runs methods. A method such as `func (s) TestX(t
+	// *testing.T)` is run by a suite runner through reflection, which may
+	// set up and check process-wide state around every test (swap a global
+	// value, check for leaked goroutines), so it must not be made parallel.
+	if funcDecl.Recv != nil {
 		return false, ""
 	}
 
@@ -304,6 +314,24 @@ func isTestFunction(funcDecl *ast.FuncDecl) (bool, string) {
 	}
 
 	return s.Name == testMethodPackageType, param.Names[0].Name
+}
+
+// isTestName reports whether name is the name of a test function as `go test`
+// sees it: Test, or Test followed by a character that is not a lower-case
+// letter. Testable or Testing are not tests.
+func isTestName(name string) bool {
+	rest, ok := strings.CutPrefix(name, testPrefix)
+	if !ok {
+		return false
+	}
+
+	if rest == "" {
+		return true
+	}
+
+	r, _ := utf8.DecodeRuneInString(rest)
+
+	return !unicode.IsLower(r)
 }
 
 func exprCallHasMethod(node ast.Node, receiverName, methodName string) bool {
