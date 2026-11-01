@@ -217,3 +217,12 @@ func TestIsNolintDirectiveForTparagen(t *testing.T) {
 		})
 	}
 }
+
+// A nolint directive at the end of a line of code applies to the statement
+// starting on that line, as it does for the linters: the t.Run call, the for
+// loop or the if block holding it, or the whole test function.
+func TestGenerateTParallelNolintInline(t *testing.T) {
+	t.Parallel()
+
+	runGolden(t, "nolint-inline")
+}
