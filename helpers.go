@@ -63,8 +63,7 @@ func newFileImports(f *ast.File) *fileImports {
 	return imp
 }
 
-// callee is a call that hands a testing value to a function or method which
-// may be a helper.
+// callee is a call to a function or method which may be a helper.
 type callee struct {
 	name string
 	// selector is set for x.name(...) calls, recv is x when it is an
@@ -73,6 +72,10 @@ type callee struct {
 	selector bool
 	recv     string
 	local    bool
+	// passes reports whether the call hands a testing value to the callee.
+	// A helper that reaches Setenv through a stored testing value (see
+	// helperIndex.stored) denies Parallel() whether or not one is passed.
+	passes bool
 }
 
 // calleeOf describes the function or method that call calls. local reports
@@ -104,45 +107,64 @@ func calleeOf(call *ast.CallExpr, local func(string) bool) (callee, bool) {
 	return callee{}, false
 }
 
-// helperIndex knows the helper functions that a test cannot call with its
-// *testing.T once it is parallel: they call t.Setenv, t.Chdir or
-// cryptotest.SetGlobalRandom(t, ...) on the testing value they are given,
-// directly or through another such helper, and those calls panic in a
+// helperIndex knows the helper functions that a test cannot call once it is
+// parallel: they call t.Setenv, t.Chdir or cryptotest.SetGlobalRandom(t, ...)
+// on the testing value they are given, directly or through another such
+// helper, or on a testing value stored in a struct (`e.t.Setenv(...)` in a
+// method of `type env struct{ t *testing.T }`), and those calls panic in a
 // parallel test.
 type helperIndex struct {
-	// funcs and methods hold the names of such functions and methods, by the
-	// package that declares them.
+	// funcs and methods hold the names of the helpers taking a testing
+	// value, by the package that declares them. They deny Parallel() when
+	// called with one.
 	funcs, methods map[pkgID]map[string]bool
+	// stored and storedMethods hold the names of the helpers reaching
+	// Setenv or Chdir on a stored testing value. They take none, so they
+	// deny Parallel() whenever they are called.
+	stored, storedMethods map[pkgID]map[string]bool
 	// pkgsByPath maps an import path to the packages found in its directory.
 	pkgsByPath map[string][]pkgID
 }
 
-// deniesParallel reports whether call hands one of tIdents to a helper that
-// cannot be called from a parallel test. The call is made from package pkg,
-// in a file importing imp; local reports whether a name is declared in the
-// calling function, i.e. does not refer to an imported package.
+// deniesParallel reports whether call is a call to a helper that cannot be
+// made from a parallel test: one of tIdents is handed to a helper taking a
+// testing value, or a helper reaching Setenv on a stored one is called. The
+// call is made from package pkg, in a file importing imp; local reports
+// whether a name is declared in the calling function, i.e. does not refer to
+// an imported package.
 func (h *helperIndex) deniesParallel(call *ast.CallExpr, pkg pkgID, imp *fileImports, local func(string) bool, tIdents map[string]bool) bool {
-	if h == nil || !passesTestingValue(call, tIdents) {
+	if h == nil {
 		return false
 	}
 
 	c, ok := calleeOf(call, local)
+	c.passes = passesTestingValue(call, tIdents)
 
 	return ok && h.denies(c, pkg, imp)
 }
 
 // denies reports whether c, called from package pkg in a file importing imp,
-// is a known helper. The types of values are unknown, so a method call counts
-// when any method of that name in this package or an imported one is a
-// helper.
+// is a known helper: one taking a testing value when c passes one, or one
+// reaching Setenv on a stored testing value in any case. The types of values
+// are unknown, so a method call counts when any method of that name in this
+// package or an imported one is a helper.
 func (h *helperIndex) denies(c callee, pkg pkgID, imp *fileImports) bool {
+	if c.passes && h.deniesIn(c, pkg, imp, h.funcs, h.methods) {
+		return true
+	}
+
+	return h.deniesIn(c, pkg, imp, h.stored, h.storedMethods)
+}
+
+// deniesIn is denies looking up c in the given function and method sets.
+func (h *helperIndex) deniesIn(c callee, pkg pkgID, imp *fileImports, funcs, methods map[pkgID]map[string]bool) bool {
 	if !c.selector {
-		if h.funcs[pkg][c.name] {
+		if funcs[pkg][c.name] {
 			return true
 		}
 
 		for _, path := range imp.dot {
-			if h.anyFunc(h.pkgsByPath[path], c.name) {
+			if anyFunc(funcs, h.pkgsByPath[path], c.name) {
 				return true
 			}
 		}
@@ -152,17 +174,17 @@ func (h *helperIndex) denies(c callee, pkg pkgID, imp *fileImports) bool {
 
 	if c.recv != "" && !c.local {
 		if pkgs := h.importedAs(c.recv, imp); len(pkgs) > 0 {
-			return h.anyFunc(pkgs, c.name)
+			return anyFunc(funcs, pkgs, c.name)
 		}
 	}
 
-	if h.methods[pkg][c.name] {
+	if methods[pkg][c.name] {
 		return true
 	}
 
 	for _, path := range imp.paths() {
 		for _, p := range h.pkgsByPath[path] {
-			if h.methods[p][c.name] {
+			if methods[p][c.name] {
 				return true
 			}
 		}
@@ -191,9 +213,9 @@ func (h *helperIndex) importedAs(name string, imp *fileImports) []pkgID {
 	return pkgs
 }
 
-func (h *helperIndex) anyFunc(pkgs []pkgID, name string) bool {
+func anyFunc(funcs map[pkgID]map[string]bool, pkgs []pkgID, name string) bool {
 	for _, p := range pkgs {
-		if h.funcs[p][name] {
+		if funcs[p][name] {
 			return true
 		}
 	}
@@ -225,18 +247,26 @@ func passesTestingValue(call *ast.CallExpr, tIdents map[string]bool) bool {
 }
 
 // helperSummary is what the index needs to know about a function or method
-// that takes a testing value. Keeping this instead of the syntax tree lets
-// the files be dropped as soon as they are scanned.
+// that takes a testing value, or reaches Setenv or Chdir on a stored one.
+// Keeping this instead of the syntax tree lets the files be dropped as soon
+// as they are scanned.
 type helperSummary struct {
 	pkg     pkgID
 	name    string
 	method  bool
 	imports *fileImports
+	// takesTesting is set when the function takes a testing value. One that
+	// does not is only summarized when it denies by itself (see stored in
+	// helperIndex): its callees are not followed.
+	takesTesting bool
 	// denies is set when the function itself calls Setenv, Chdir or
-	// SetGlobalRandom on one of its testing values.
+	// SetGlobalRandom on one of its testing values, or Setenv or Chdir on a
+	// testing value stored in one of its variables (`e.t.Setenv(...)`).
 	denies bool
-	// callees are the calls handing one of its testing values to another
-	// function or method.
+	// callees are the calls to other functions or methods that may be
+	// helpers: those handing one of its testing values to the callee, and
+	// those on a value of the function (`e.set()`) which may reach Setenv
+	// on a stored testing value.
 	callees []callee
 }
 
@@ -305,8 +335,8 @@ func isEntryPoint(fd *ast.FuncDecl) bool {
 	return false
 }
 
-// summarize returns the summary of fd, or false when it takes no testing
-// value.
+// summarize returns the summary of fd, or false when it neither takes a
+// testing value nor reaches Setenv or Chdir on a stored one.
 func summarize(fd *ast.FuncDecl, pkg pkgID, imports *fileImports) (helperSummary, bool) {
 	params := map[string]bool{}
 
@@ -320,10 +350,6 @@ func summarize(fd *ast.FuncDecl, pkg pkgID, imports *fileImports) (helperSummary
 		}
 	}
 
-	if len(params) == 0 {
-		return helperSummary{}, false
-	}
-
 	tIdents := testingTIdents("", fd.Body)
 	delete(tIdents, "")
 
@@ -334,7 +360,7 @@ func summarize(fd *ast.FuncDecl, pkg pkgID, imports *fileImports) (helperSummary
 	locals := localNames(fd)
 	local := func(name string) bool { return locals[name] }
 
-	s := helperSummary{pkg: pkg, name: fd.Name.Name, method: fd.Recv != nil, imports: imports}
+	s := helperSummary{pkg: pkg, name: fd.Name.Name, method: fd.Recv != nil, imports: imports, takesTesting: len(params) > 0}
 
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -342,20 +368,33 @@ func summarize(fd *ast.FuncDecl, pkg pkgID, imports *fileImports) (helperSummary
 			return !s.denies
 		}
 
-		if forbidsParallel(call, tIdents) {
+		if forbidsParallel(call, tIdents, local) {
 			s.denies = true
 
 			return false
 		}
 
-		if passesTestingValue(call, tIdents) {
-			if c, ok := calleeOf(call, local); ok {
+		if !s.takesTesting {
+			return true
+		}
+
+		if c, ok := calleeOf(call, local); ok {
+			c.passes = passesTestingValue(call, tIdents)
+
+			// A plain function cannot reach a stored testing value unless it
+			// is given one; a method or a function value stored in a local
+			// value can (`e.set()`, `tc.setup()`).
+			if c.passes || (c.selector && c.local) {
 				s.callees = append(s.callees, c)
 			}
 		}
 
 		return true
 	})
+
+	if !s.takesTesting && !s.denies {
+		return helperSummary{}, false
+	}
 
 	return s, true
 }
@@ -365,9 +404,11 @@ func summarize(fd *ast.FuncDecl, pkg pkgID, imports *fileImports) (helperSummary
 // are checked again until nothing changes.
 func (b *helperIndexBuilder) build() *helperIndex {
 	h := &helperIndex{
-		funcs:      map[pkgID]map[string]bool{},
-		methods:    map[pkgID]map[string]bool{},
-		pkgsByPath: b.pkgsByPath,
+		funcs:         map[pkgID]map[string]bool{},
+		methods:       map[pkgID]map[string]bool{},
+		stored:        map[pkgID]map[string]bool{},
+		storedMethods: map[pkgID]map[string]bool{},
+		pkgsByPath:    b.pkgsByPath,
 	}
 
 	denies := make([]bool, len(b.summaries))
@@ -383,7 +424,13 @@ func (b *helperIndexBuilder) build() *helperIndex {
 			denies[i], changed = true, true
 
 			byName := h.funcs
-			if s.method {
+
+			switch {
+			case !s.takesTesting && s.method:
+				byName = h.storedMethods
+			case !s.takesTesting:
+				byName = h.stored
+			case s.method:
 				byName = h.methods
 			}
 
@@ -449,7 +496,17 @@ var (
 	funcDeclStart = regexp.MustCompile(`(?m)^func\b`)
 	funcName      = regexp.MustCompile(`^func\s*(?:\([^)]*\)\s*)?([\pL_][\pL\pN_]*)`)
 	testingParam  = regexp.MustCompile(`\.(?:T|B|F|TB)\b`)
+	// storedDenyingCall matches a Setenv or Chdir call on a selector such as
+	// e.t.Setenv(...): a testing value stored in a struct.
+	storedDenyingCall = regexp.MustCompile(`\.[\pL_][\pL\pN_]*\.(?:Setenv|Chdir)\(`)
 )
+
+// mayStoreTestingValue reports whether src may declare a function that
+// reaches Setenv or Chdir on a testing value stored in a struct. It looks at
+// the text, so it can only err towards true.
+func mayStoreTestingValue(src []byte) bool {
+	return storedDenyingCall.Match(src)
+}
 
 // mayDeclareHelper reports whether src may declare a function, other than a
 // test, benchmark or fuzz test, that takes a testing value. It looks at the

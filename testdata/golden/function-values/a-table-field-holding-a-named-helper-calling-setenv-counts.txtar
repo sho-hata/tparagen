@@ -1,0 +1,46 @@
+Name: a table field holding a named helper calling Setenv counts
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func setenvHelper(t *testing.T) {
+	t.Setenv("KEY", "value")
+}
+
+func TestX(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T)
+	}{
+		{name: "env", setup: setenvHelper},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.setup(t)
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func setenvHelper(t *testing.T) {
+	t.Setenv("KEY", "value")
+}
+
+func TestX(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T)
+	}{
+		{name: "env", setup: setenvHelper},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.setup(t)
+		})
+	}
+}
