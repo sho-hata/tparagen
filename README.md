@@ -147,7 +147,7 @@ $ tparagen ./foo/... ./bar      # only the given packages
 $ tparagen --tags e2e ./...     # also directories whose files all need the e2e tag
 ```
 
-A pattern that matches no package is an error. `./...` does not cross into nested modules, like for the go command: run tparagen in each module, or list the modules in a `go.work` and give their patterns (`tparagen ./... ./tools/...`). tparagen must run inside a module (or a workspace).
+A pattern given on the command line that matches no package is an error. When no pattern is given and `./...` matches nothing, as in a module whose only files need a build tag (`//go:build tools`), tparagen prints a warning and reports no changes, so that a script running it in every module of a repository keeps going. `./...` does not cross into nested modules, like for the go command: run tparagen in each module, or list the modules in a `go.work` and give their patterns (`tparagen ./... ./tools/...`). tparagen must run inside a module (or a workspace).
 
 The run ends with a summary:
 ```

@@ -62,16 +62,18 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 // newRunner builds a tparagen that processes the packages matched by patterns
 // (./... when none is given) in dir, for exercising run() directly.
 func newRunner(dir string, patterns ...string) *tparagen {
-	if len(patterns) == 0 {
+	defaultPatterns := len(patterns) == 0
+	if defaultPatterns {
 		patterns = []string{defaultPattern}
 	}
 
 	return &tparagen{
-		dir:        dir,
-		patterns:   patterns,
-		outStream:  io.Discard,
-		errStream:  io.Discard,
-		ignoreDirs: []string{defaultIgnoreDir},
+		dir:             dir,
+		patterns:        patterns,
+		defaultPatterns: defaultPatterns,
+		outStream:       io.Discard,
+		errStream:       io.Discard,
+		ignoreDirs:      []string{defaultIgnoreDir},
 	}
 }
 
@@ -397,6 +399,7 @@ func TestRunProcessesOnlyMatchedPackages(t *testing.T) {
 }
 
 // A pattern that matches no package is an error, and nothing is rewritten.
+// So is ./... given explicitly when it matches nothing.
 func TestRunFailsOnPatternsMatchingNothing(t *testing.T) {
 	t.Parallel()
 
@@ -420,5 +423,39 @@ func TestRunFailsOnPatternsMatchingNothing(t *testing.T) {
 				t.Errorf("file was rewritten although the run failed:\n%s", got)
 			}
 		})
+	}
+}
+
+// The default ./... matching no package, as in a module whose only files
+// need a build tag, is not an error: there is nothing to do, and a warning
+// says so. The same pattern given explicitly is still an error.
+func TestRunWarnsWhenTheDefaultPatternMatchesNothing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"go.mod":  testGoMod,
+		"main.go": "//go:build tools\n\npackage main\n",
+	})
+
+	var out, errOut strings.Builder
+
+	r := newRunner(dir)
+	r.outStream, r.errStream = &out, &errOut
+
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run failed for the default pattern matching nothing: %v", err)
+	}
+
+	if !strings.Contains(errOut.String(), "no packages matched ./...") {
+		t.Errorf("no warning about the pattern matching nothing:\n%s", errOut.String())
+	}
+
+	if !strings.Contains(out.String(), "No changes in 0 test files") {
+		t.Errorf("unexpected summary:\n%s", out.String())
+	}
+
+	if err := newRunner(dir, "./...").run(context.Background()); err == nil {
+		t.Error("expected an error for an explicit ./... matching nothing, got nil")
 	}
 }
