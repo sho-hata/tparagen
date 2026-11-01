@@ -96,13 +96,14 @@ func RunWithOptions(ctx context.Context, outStream, errStream io.Writer, opts Op
 	}
 
 	t := &tparagen{
-		patterns:     patterns,
-		buildTags:    slices.DeleteFunc(slices.Clone(opts.BuildTags), func(tag string) bool { return tag == "" }),
-		outStream:    outStream,
-		errStream:    errStream,
-		ignoreDirs:   ignoreDirs,
-		minGoVersion: opts.MinGoVersion,
-		verbose:      opts.Verbose,
+		patterns:        patterns,
+		defaultPatterns: len(opts.Patterns) == 0,
+		buildTags:       slices.DeleteFunc(slices.Clone(opts.BuildTags), func(tag string) bool { return tag == "" }),
+		outStream:       outStream,
+		errStream:       errStream,
+		ignoreDirs:      ignoreDirs,
+		minGoVersion:    opts.MinGoVersion,
+		verbose:         opts.Verbose,
 	}
 
 	return t.run(ctx)
@@ -111,8 +112,11 @@ func RunWithOptions(ctx context.Context, outStream, errStream io.Writer, opts Op
 type tparagen struct {
 	// dir is the directory the patterns are resolved in; the current
 	// directory when empty.
-	dir                  string
-	patterns             []string
+	dir      string
+	patterns []string
+	// defaultPatterns is set when patterns were not given but defaulted to
+	// ./...: matching nothing is then a warning, not an error.
+	defaultPatterns      bool
 	buildTags            []string
 	outStream, errStream io.Writer
 	ignoreDirs           []string
@@ -376,8 +380,17 @@ func (t *tparagen) packageDirs(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("cannot list packages. %w", errors.Join(listErr...))
 	}
 
+	// A pattern given on the command line that matches nothing is an error:
+	// it is probably mistyped. The default ./... matching nothing means that
+	// every file of the tree needs a build tag (`//go:build tools`), or that
+	// there is none: nothing to do, which is said rather than failed on.
 	if !matched {
-		return nil, fmt.Errorf("no packages matched %s", strings.Join(t.patterns, " "))
+		if !t.defaultPatterns {
+			return nil, fmt.Errorf("no packages matched %s", strings.Join(t.patterns, " "))
+		}
+
+		fmt.Fprintf(t.errStream, "warning: no packages matched %s: if every file needs a build tag, give it with --tags\n",
+			strings.Join(t.patterns, " "))
 	}
 
 	return dirs, nil
