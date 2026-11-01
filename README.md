@@ -196,6 +196,12 @@ Args:
 ```
 ## Installation
 ```
+brew install sho-hata/tap/tparagen
+```
+
+or
+
+```
 go install github.com/sho-hata/tparagen/cmd/tparagen@latest
 ```
 
