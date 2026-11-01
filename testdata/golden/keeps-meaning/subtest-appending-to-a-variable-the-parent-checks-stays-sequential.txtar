@@ -1,0 +1,31 @@
+Name: subtest appending to a variable the parent checks stays sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	var got []string
+	for _, name := range []string{"a", "b"} {
+		t.Run(name, func(t *testing.T) {
+			got = append(got, name)
+		})
+	}
+	assert.Equal(t, []string{"a", "b"}, got)
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	var got []string
+	for _, name := range []string{"a", "b"} {
+		t.Run(name, func(t *testing.T) {
+			got = append(got, name)
+		})
+	}
+	assert.Equal(t, []string{"a", "b"}, got)
+}

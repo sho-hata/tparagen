@@ -178,10 +178,12 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 		// A parallel subtest's t.Run returns before the subtest finishes, so
 		// one whose result is used (`if !t.Run(...)`) must stay sequential.
 		// So must one that captures a variable the test reassigns: every
-		// parallel subtest would see the last value.
+		// parallel subtest would see the last value. And so must one that
+		// assigns a variable of the test: it would race with its siblings
+		// and run after the test checked the variable.
 		_, resultDiscarded := stack[len(stack)-1].(*ast.ExprStmt)
 		mayParallel := subtestsMayParallel && resultDiscarded && !assignsCapturedVar(body, fun, nil) &&
-			!usesDeferredValue(body, fun, scope)
+			!writesCapturedVar(body, fun, scope) && !usesDeferredValue(body, fun, scope)
 
 		if insertTParallel(fun.Body, innerTestVar, scope, needFixLoopVar, mayParallel) && needFixLoopVar {
 			scope.stats.loopVarCopies += copyLoopVars(stack, fun)
@@ -226,10 +228,11 @@ func callsParallel(body *ast.BlockStmt, testVar string) bool {
 }
 
 // assignsCapturedVar reports whether node assigns a variable that fun
-// references, other than those in except. Examples are want in `want = 2`
-// between two subtests, i in `for i < 3 { ...; i++ }` and tc in
-// `for _, tc = range xs`: a parallel subtest runs after its parent returns and
-// would see the last value. The post statement of a loop that declares the
+// references, or a field or element of one, other than those in except.
+// Examples are want in `want = 2` between two subtests, card in
+// `card.Status = "closed"` in a sibling subtest, i in `for i < 3 { ...; i++ }`
+// and tc in `for _, tc = range xs`: a parallel subtest runs after its parent
+// returns and would see the last value. The post statement of a loop that declares the
 // variable (the i++ in `for i := 0; ...; i++`) does not count: from Go 1.22
 // every iteration gets its own i, and copyLoopVars copies it before.
 // Assignments inside fun itself do not count.
@@ -252,8 +255,8 @@ func assignsCapturedVarOf(node ast.Node, fun *ast.FuncLit, except []string, own 
 
 	check := func(exprs ...ast.Expr) {
 		for _, expr := range exprs {
-			id, ok := expr.(*ast.Ident)
-			if ok && !slices.Contains(except, id.Name) && !own[id.Name] && identReferenced(fun.Body, id.Name) {
+			id := rootIdent(expr)
+			if id != nil && !slices.Contains(except, id.Name) && !own[id.Name] && identReferenced(fun.Body, id.Name) {
 				captured = true
 			}
 		}
@@ -313,6 +316,110 @@ func union(a, b map[string]bool) map[string]bool {
 	maps.Copy(names, b)
 
 	return names
+}
+
+// writesCapturedVar reports whether the subtest fun assigns a variable of the
+// function starting it, or a field or element of one: got in
+// `got = append(got, x)`, card in `card.Status = "closed"`, n in `n++`, or
+// through a closure of that function that fun calls, such as inc in
+// `inc := func() { n++ }`. A parallel subtest doing so races with its
+// siblings, and runs only after the function returned, i.e. after it checked
+// the variable. Variables that fun declares itself are its own.
+func writesCapturedVar(body *ast.BlockStmt, fun *ast.FuncLit, scope *testScope) bool {
+	own := funcLitNames(fun)
+	closures := localClosures(body)
+
+	var writes bool
+
+	check := func(exprs ...ast.Expr) {
+		for _, expr := range exprs {
+			id := rootIdent(expr)
+			if id != nil && id.Name != "_" && !own[id.Name] && !scope.tIdents[id.Name] && scope.locals[id.Name] {
+				writes = true
+			}
+		}
+	}
+
+	var inspect func(node ast.Node)
+
+	inspect = func(node ast.Node) {
+		ast.Inspect(node, func(n ast.Node) bool {
+			if writes {
+				return false
+			}
+
+			switch n := n.(type) {
+			case *ast.AssignStmt:
+				if n.Tok != token.DEFINE {
+					check(n.Lhs...)
+				}
+			case *ast.IncDecStmt:
+				check(n.X)
+			case *ast.RangeStmt:
+				if n.Tok == token.ASSIGN {
+					check(n.Key, n.Value)
+				}
+			case *ast.CallExpr:
+				if id, ok := n.Fun.(*ast.Ident); ok {
+					if lit, ok := closures[id.Name]; ok && !own[id.Name] {
+						delete(closures, id.Name) // Each closure is searched once.
+						inspect(lit.Body)
+					}
+				}
+			}
+
+			return !writes
+		})
+	}
+
+	inspect(fun.Body)
+
+	return writes
+}
+
+// localClosures returns the function literals assigned to a variable in body
+// (`inc := func() {...}`), by variable name. Function literals inside other
+// function literals are not searched.
+func localClosures(body *ast.BlockStmt) map[string]*ast.FuncLit {
+	closures := map[string]*ast.FuncLit{}
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		var lhs, rhs []ast.Expr
+
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.AssignStmt:
+			lhs, rhs = n.Lhs, n.Rhs
+		case *ast.ValueSpec:
+			for _, name := range n.Names {
+				lhs = append(lhs, name)
+			}
+
+			rhs = n.Values
+		default:
+			return true
+		}
+
+		if len(lhs) != len(rhs) {
+			return true
+		}
+
+		for i := range lhs {
+			id, ok := lhs[i].(*ast.Ident)
+			if !ok {
+				continue
+			}
+
+			if lit, ok := rhs[i].(*ast.FuncLit); ok {
+				closures[id.Name] = lit
+			}
+		}
+
+		return true
+	})
+
+	return closures
 }
 
 // usesDeferredValue reports whether the subtest fun uses a variable that the
