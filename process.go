@@ -317,22 +317,106 @@ func union(a, b map[string]bool) map[string]bool {
 
 // usesDeferredValue reports whether the subtest fun uses a variable that the
 // function starting it hands to a defer statement, such as srv in
-// `defer srv.Close()`. A parallel subtest only starts running after that
-// function has returned, i.e. after its deferred calls have closed the server,
-// canceled the context or waited for the WaitGroup. When the deferred call is
-// a plain function variable, the variables declared together with it count
-// too: ctx in `ctx, cancel := context.WithCancel(...); defer cancel()`.
+// `defer srv.Close()`, or a value built from such a variable, such as m in
+// `m := NewMockClient(ctrl)` after `defer ctrl.Finish()`. A parallel subtest
+// only starts running after that function has returned, i.e. after its
+// deferred calls have closed the server, canceled the context or checked the
+// mock. When the deferred call is a plain function variable, the variables
+// declared together with it count too: ctx in
+// `ctx, cancel := context.WithCancel(...); defer cancel()`.
 //
 // The function starting the subtest is the test whose body is body: subtests
 // started inside other function literals are left alone (see insertTParallel).
+// A name that fun declares itself is its own, not the function's.
 func usesDeferredValue(body *ast.BlockStmt, fun *ast.FuncLit, scope *testScope) bool {
-	for name := range deferredVars(body, nil) {
-		if !scope.tIdents[name] && identReferenced(fun.Body, name) {
+	own := funcLitNames(fun)
+
+	for name := range derivedVars(body, deferredVars(body, nil)) {
+		if !scope.tIdents[name] && !own[name] && identReferenced(fun.Body, name) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// derivedVars returns vars plus every variable of the function with body body
+// that is built from one of them, directly or through other variables: one
+// declared or assigned with an expression that mentions one (`m :=
+// NewMockClient(ctrl)`, `payload.URL = srv.URL`, `tests := []tc{{url:
+// srv.URL}}`), or ranging over one (`for _, tt := range tests`). Function
+// literals inside body are not searched: they declare their own variables.
+func derivedVars(body *ast.BlockStmt, vars map[string]bool) map[string]bool {
+	derived := maps.Clone(vars)
+
+	mentions := func(exprs ...ast.Expr) bool {
+		for _, expr := range exprs {
+			if expr == nil {
+				continue
+			}
+
+			var found bool
+
+			ast.Inspect(expr, func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok && derived[id.Name] {
+					found = true
+				}
+
+				return !found
+			})
+
+			if found {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	add := func(exprs ...ast.Expr) bool {
+		var added bool
+
+		for _, expr := range exprs {
+			if id := rootIdent(expr); id != nil && id.Name != "_" && !derived[id.Name] {
+				derived[id.Name], added = true, true
+			}
+		}
+
+		return added
+	}
+
+	for changed := true; changed; {
+		changed = false
+
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.FuncLit:
+				return false
+			case *ast.AssignStmt:
+				if mentions(n.Rhs...) && add(n.Lhs...) {
+					changed = true
+				}
+			case *ast.RangeStmt:
+				if mentions(n.X) && add(n.Key, n.Value) {
+					changed = true
+				}
+			case *ast.ValueSpec:
+				if !mentions(n.Values...) {
+					return true
+				}
+
+				for _, name := range n.Names {
+					if add(name) {
+						changed = true
+					}
+				}
+			}
+
+			return true
+		})
+	}
+
+	return derived
 }
 
 // deferredVars returns the variables of the function with body body and
