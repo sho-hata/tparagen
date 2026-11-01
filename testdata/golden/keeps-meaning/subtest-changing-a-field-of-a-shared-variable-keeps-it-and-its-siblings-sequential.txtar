@@ -1,0 +1,42 @@
+Name: subtest changing a field of a shared variable keeps it and its siblings sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	card := newCard(t)
+	t.Run("active", func(t *testing.T) {
+		assert.NoError(t, authorize(card))
+	})
+	t.Run("closed", func(t *testing.T) {
+		card.Status = "closed"
+		defer func() { card.Status = "active" }()
+		assert.Error(t, authorize(card))
+	})
+	t.Run("unrelated", func(t *testing.T) {
+		assert.NoError(t, ping())
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	card := newCard(t)
+	t.Run("active", func(t *testing.T) {
+		assert.NoError(t, authorize(card))
+	})
+	t.Run("closed", func(t *testing.T) {
+		card.Status = "closed"
+		defer func() { card.Status = "active" }()
+		assert.Error(t, authorize(card))
+	})
+	t.Run("unrelated", func(t *testing.T) {
+		t.Parallel()
+		assert.NoError(t, ping())
+	})
+}
