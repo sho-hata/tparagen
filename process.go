@@ -94,6 +94,8 @@ func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers
 	imports := importNames(f)
 	fileImports := newFileImports(f)
 	pkg := packageOf(filename, f)
+	nolint := nolintLines(fs, f)
+	commentEnds := lineCommentEnds(fs, f)
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		funcDecl, ok := n.(*ast.FuncDecl)
@@ -101,8 +103,10 @@ func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers
 			return true
 		}
 
-		// Check nolint target
-		if !isTparagenTargetFunc(funcDecl.Doc) {
+		// Check nolint target: a directive in the doc comment, or at the end
+		// of the func line (`func TestX(t *testing.T) { //nolint:paralleltest`).
+		if !isTparagenTargetFunc(funcDecl.Doc) || nolint[fs.Position(funcDecl.Pos()).Line] ||
+			(funcDecl.Body != nil && nolint[fs.Position(funcDecl.Body.Lbrace).Line]) {
 			return true
 		}
 
@@ -119,6 +123,9 @@ func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers
 			fileImports: fileImports,
 			pkg:         pkg,
 			helpers:     helpers,
+			fset:        fs,
+			nolintLines: nolint,
+			commentEnds: commentEnds,
 			stats:       &stats,
 		}
 		scope.localHelpers = localDenyingClosures(funcDecl.Body, scope)
@@ -165,6 +172,13 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 			return true
 		}
 
+		// A nolint directive at the end of the t.Run line, or of the line
+		// of a statement enclosing it (a for loop, an if block), excludes
+		// the subtest, as it does for the linters.
+		if scope.excludedByNolint(n, stack) {
+			return false
+		}
+
 		// n is a call to t.Run. Its subtest is handled by the recursive
 		// call below, with the subtest's own *testing.T name.
 		fun := getRunCallback(n)
@@ -186,14 +200,14 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 			!writesCapturedVar(body, fun, scope) && !usesDeferredValue(body, fun, scope)
 
 		if insertTParallel(fun.Body, innerTestVar, scope, needFixLoopVar, mayParallel) && needFixLoopVar {
-			scope.stats.loopVarCopies += copyLoopVars(stack, fun)
+			scope.stats.loopVarCopies += copyLoopVars(stack, fun, scope)
 		}
 
 		return false
 	})
 
 	if insert {
-		tpStmt := buildTParallelStmt(body.Lbrace, testVar)
+		tpStmt := buildTParallelStmt(scope.insertPos(body), testVar)
 		body.List = append([]ast.Stmt{tpStmt}, body.List...)
 		scope.stats.parallel++
 	} else if !alreadyParallel {
@@ -621,7 +635,7 @@ func deferredVars(body *ast.BlockStmt, params *ast.FieldList) map[string]bool {
 // variables that the now parallel subtest fun captures: `tc := tc`. Before Go
 // 1.22 every iteration shares the same loop variable
 // (https://go.dev/doc/go1.22#language). It returns the number of copies.
-func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) int {
+func copyLoopVars(stack []ast.Node, fun *ast.FuncLit, scope *testScope) int {
 	var n int
 
 	for _, node := range stack {
@@ -645,7 +659,7 @@ func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) int {
 
 		for _, name := range loopVars {
 			if identReferenced(fun.Body, name) && !copied[name] {
-				copies = append(copies, buildLoopVarReAssignmentStmt(body.Lbrace, name))
+				copies = append(copies, buildLoopVarReAssignmentStmt(scope.insertPos(body), name))
 			}
 		}
 
@@ -795,6 +809,14 @@ type testScope struct {
 	// test function, such as `doTest := func(tb testing.TB) {...}`, whose
 	// body denies Parallel(). Calling one denies it too.
 	localHelpers map[string]bool
+	// fset locates the nodes of the file.
+	fset *token.FileSet
+	// nolintLines are the lines of the file holding a nolint directive that
+	// applies to tparagen (see nolintLines).
+	nolintLines map[int]bool
+	// commentEnds is where the last comment starting on each line ends, by
+	// line (see lineCommentEnds).
+	commentEnds map[int]token.Pos
 	// stats collects what was done to the file the function is in.
 	stats *fileStats
 }
@@ -1296,6 +1318,77 @@ func loopVarsCopiedInBody(body *ast.BlockStmt, loopVars []string) map[string]boo
 	}
 
 	return copied
+}
+
+// lineCommentEnds returns, for each line of f on which a comment starts,
+// where the last such comment ends.
+func lineCommentEnds(fs *token.FileSet, f *ast.File) map[int]token.Pos {
+	ends := map[int]token.Pos{}
+
+	for _, cg := range f.Comments {
+		for _, c := range cg.List {
+			line := fs.Position(c.Slash).Line
+			if c.End() > ends[line] {
+				ends[line] = c.End()
+			}
+		}
+	}
+
+	return ends
+}
+
+// insertPos returns the position to give a statement inserted at the top of
+// body: its opening brace, or the end of a comment trailing it (`func TestX(t
+// *testing.T) { // see issue 12`), so that the comment stays on the line of
+// the brace instead of moving to the line of the inserted statement.
+func (s *testScope) insertPos(body *ast.BlockStmt) token.Pos {
+	if end, ok := s.commentEnds[s.fset.Position(body.Lbrace).Line]; ok && end > body.Lbrace {
+		return end
+	}
+
+	return body.Lbrace
+}
+
+// nolintLines returns the lines of f holding a nolint directive that applies
+// to tparagen, wherever the directive is: on its own line, or at the end of a
+// line of code such as `t.Run("x", func(t *testing.T) { //nolint:paralleltest`.
+func nolintLines(fs *token.FileSet, f *ast.File) map[int]bool {
+	lines := map[int]bool{}
+
+	for _, cg := range f.Comments {
+		for _, c := range cg.List {
+			if isNolintDirectiveForTparagen(c.Text) {
+				lines[fs.Position(c.Slash).Line] = true
+			}
+		}
+	}
+
+	return lines
+}
+
+// excludedByNolint reports whether the t.Run call n, whose enclosing nodes
+// are stack, is excluded by a nolint directive at the end of its own line or
+// of the line starting one of the statements enclosing it, such as the for
+// loop or the if block it is in. Like for the linters, a directive on the line
+// of a statement applies to the whole statement.
+func (s *testScope) excludedByNolint(n ast.Node, stack []ast.Node) bool {
+	if len(s.nolintLines) == 0 {
+		return false
+	}
+
+	line := func(pos token.Pos) int { return s.fset.Position(pos).Line }
+
+	if s.nolintLines[line(n.Pos())] {
+		return true
+	}
+
+	for _, node := range stack {
+		if _, ok := node.(ast.Stmt); ok && s.nolintLines[line(node.Pos())] {
+			return true
+		}
+	}
+
+	return false
 }
 
 // nolintTargets are the linter names that, when listed in a nolint directive,

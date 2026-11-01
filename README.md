@@ -119,7 +119,7 @@ func SampleTest(t *testing.T) {
 - [x] Select the packages to process with the patterns the go command accepts (`./...`, `./foo/...`, `example.com/m/bar`). They are resolved by the go command (`go list`), like for `go test`, so only the selected directories are read: `testdata`, `vendor` and directories starting with `.` or `_` are skipped, and `./...` stops at nested modules.
 - [x] Test files excluded by build constraints (e.g. `//go:build integration`) are processed as well when their package is selected. A directory whose files all need a tag is selected only when the tag is given with `--tags`.
 - [x] Ignore specified directories with cli option --ignore
-- [x] nolint comment support: parallel,paralleltest
+- [x] nolint comment support: `//nolint:paralleltest`, `//nolint:tparallel` and `//nolint:all` in the doc comment of a test or at the top of a file, and at the end of a line of code, where they apply to the statement starting there like for the linters: the test function (`func TestX(t *testing.T) { //nolint:paralleltest`), the subtest (`t.Run("x", func(t *testing.T) { //nolint:paralleltest`), or a `for` loop or `if` block starting the subtests
 - [x] Only functions that `go test` runs as tests are rewritten. Methods such as `func (s) TestX(t *testing.T)` are left alone: they are run by suite runners that may set up and check process-wide state around every test. So are functions such as `Testable`, which `go test` does not treat as tests.
 
 ### The following cases are not supported
