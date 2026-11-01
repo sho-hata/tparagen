@@ -1,0 +1,51 @@
+Name: subtest using a table holding a deferred server URL stays sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	payload := &Request{}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	payload.CertURL = srv.URL
+
+	tests := []struct {
+		name    string
+		payload *Request
+	}{
+		{name: "valid", payload: payload},
+		{name: "invalid", payload: &Request{CertURL: "http://example.com"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verify(t, tt.payload)
+		})
+	}
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	payload := &Request{}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	payload.CertURL = srv.URL
+
+	tests := []struct {
+		name    string
+		payload *Request
+	}{
+		{name: "valid", payload: payload},
+		{name: "invalid", payload: &Request{CertURL: "http://example.com"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verify(t, tt.payload)
+		})
+	}
+}
