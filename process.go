@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/version"
+	"maps"
 	"slices"
 	"strings"
 	"unicode"
@@ -232,13 +233,27 @@ func callsParallel(body *ast.BlockStmt, testVar string) bool {
 // variable (the i++ in `for i := 0; ...; i++`) does not count: from Go 1.22
 // every iteration gets its own i, and copyLoopVars copies it before.
 // Assignments inside fun itself do not count.
+//
+// Scopes are not resolved, but the two common cases of shadowing are: a name
+// that fun declares itself (`err` in `_, err := f()`) is its own, whatever is
+// assigned to a variable of that name outside, and an assignment inside another
+// function literal to a name that literal declares itself (`err = g()` in a
+// sibling subtest that started with `_, err := f()`) is to that literal's own
+// variable.
 func assignsCapturedVar(node ast.Node, fun *ast.FuncLit, except []string) bool {
+	return assignsCapturedVarOf(node, fun, except, funcLitNames(fun))
+}
+
+// assignsCapturedVarOf is assignsCapturedVar with the names that do not count
+// as captured: those fun declares itself, plus those declared by the function
+// literals enclosing node, when node is inside one.
+func assignsCapturedVarOf(node ast.Node, fun *ast.FuncLit, except []string, own map[string]bool) bool {
 	var captured bool
 
 	check := func(exprs ...ast.Expr) {
 		for _, expr := range exprs {
 			id, ok := expr.(*ast.Ident)
-			if ok && !slices.Contains(except, id.Name) && identReferenced(fun.Body, id.Name) {
+			if ok && !slices.Contains(except, id.Name) && !own[id.Name] && identReferenced(fun.Body, id.Name) {
 				captured = true
 			}
 		}
@@ -250,6 +265,10 @@ func assignsCapturedVar(node ast.Node, fun *ast.FuncLit, except []string) bool {
 		}
 
 		switch s := m.(type) {
+		case *ast.FuncLit:
+			captured = assignsCapturedVarOf(s.Body, fun, except, union(own, funcLitNames(s)))
+
+			return false
 		case *ast.AssignStmt:
 			if s.Tok != token.DEFINE {
 				check(s.Lhs...)
@@ -262,12 +281,12 @@ func assignsCapturedVar(node ast.Node, fun *ast.FuncLit, except []string) bool {
 			}
 		case *ast.ForStmt:
 			if s.Post != nil {
-				captured = assignsCapturedVar(s.Post, fun, append(slices.Clone(except), forLoopVarNames(s)...))
+				captured = assignsCapturedVarOf(s.Post, fun, append(slices.Clone(except), forLoopVarNames(s)...), own)
 			}
 
 			for _, part := range []ast.Node{s.Init, s.Body} {
 				if !captured && part != nil {
-					captured = assignsCapturedVar(part, fun, except)
+					captured = assignsCapturedVarOf(part, fun, except, own)
 				}
 			}
 
@@ -278,6 +297,22 @@ func assignsCapturedVar(node ast.Node, fun *ast.FuncLit, except []string) bool {
 	})
 
 	return captured
+}
+
+// funcLitNames returns the names declared anywhere inside the function literal
+// fun: its parameters and results, and every variable declared with :=, var
+// or range in its body, including in nested function literals.
+func funcLitNames(fun *ast.FuncLit) map[string]bool {
+	return localNames(&ast.FuncDecl{Type: fun.Type, Body: fun.Body})
+}
+
+// union returns a set holding the names of both a and b.
+func union(a, b map[string]bool) map[string]bool {
+	names := make(map[string]bool, len(a)+len(b))
+	maps.Copy(names, a)
+	maps.Copy(names, b)
+
+	return names
 }
 
 // usesDeferredValue reports whether the subtest fun uses a variable that the

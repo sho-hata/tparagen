@@ -1,0 +1,36 @@
+Name: subtest declaring the reassigned name itself is not kept sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	want := 1
+	t.Run("one", func(t *testing.T) {
+		fmt.Println(want)
+	})
+	want = 2
+	t.Run("two", func(t *testing.T) {
+		want := 3
+		fmt.Println(want)
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	want := 1
+	t.Run("one", func(t *testing.T) {
+		fmt.Println(want)
+	})
+	want = 2
+	t.Run("two", func(t *testing.T) {
+		t.Parallel()
+		want := 3
+		fmt.Println(want)
+	})
+}
