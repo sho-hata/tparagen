@@ -1,0 +1,43 @@
+Name: a subtest run with a named helper calling Setenv keeps the test sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func setenvHelper(t *testing.T) {
+	t.Setenv("KEY", "value")
+}
+
+func plainHelper(t *testing.T) {
+	t.Log("x")
+}
+
+func TestX(t *testing.T) {
+	t.Run("env", setenvHelper)
+}
+
+func TestY(t *testing.T) {
+	t.Run("plain", plainHelper)
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func setenvHelper(t *testing.T) {
+	t.Setenv("KEY", "value")
+}
+
+func plainHelper(t *testing.T) {
+	t.Log("x")
+}
+
+func TestX(t *testing.T) {
+	t.Run("env", setenvHelper)
+}
+
+func TestY(t *testing.T) {
+	t.Parallel()
+	t.Run("plain", plainHelper)
+}
