@@ -94,6 +94,8 @@ func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers
 	imports := importNames(f)
 	fileImports := newFileImports(f)
 	pkg := packageOf(filename, f)
+	nolint := nolintLines(fs, f)
+	commentEnds := lineCommentEnds(fs, f)
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		funcDecl, ok := n.(*ast.FuncDecl)
@@ -101,8 +103,10 @@ func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers
 			return true
 		}
 
-		// Check nolint target
-		if !isTparagenTargetFunc(funcDecl.Doc) {
+		// Check nolint target: a directive in the doc comment, or at the end
+		// of the func line (`func TestX(t *testing.T) { //nolint:paralleltest`).
+		if !isTparagenTargetFunc(funcDecl.Doc) || nolint[fs.Position(funcDecl.Pos()).Line] ||
+			(funcDecl.Body != nil && nolint[fs.Position(funcDecl.Body.Lbrace).Line]) {
 			return true
 		}
 
@@ -119,6 +123,9 @@ func generateTParallel(filename string, src []byte, needFixLoopVar bool, helpers
 			fileImports: fileImports,
 			pkg:         pkg,
 			helpers:     helpers,
+			fset:        fs,
+			nolintLines: nolint,
+			commentEnds: commentEnds,
 			stats:       &stats,
 		}
 		scope.localHelpers = localDenyingClosures(funcDecl.Body, scope)
@@ -165,6 +172,13 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 			return true
 		}
 
+		// A nolint directive at the end of the t.Run line, or of the line
+		// of a statement enclosing it (a for loop, an if block), excludes
+		// the subtest, as it does for the linters.
+		if scope.excludedByNolint(n, stack) {
+			return false
+		}
+
 		// n is a call to t.Run. Its subtest is handled by the recursive
 		// call below, with the subtest's own *testing.T name.
 		fun := getRunCallback(n)
@@ -178,20 +192,22 @@ func insertTParallel(body *ast.BlockStmt, testVar string, scope *testScope, need
 		// A parallel subtest's t.Run returns before the subtest finishes, so
 		// one whose result is used (`if !t.Run(...)`) must stay sequential.
 		// So must one that captures a variable the test reassigns: every
-		// parallel subtest would see the last value.
+		// parallel subtest would see the last value. And so must one that
+		// assigns a variable of the test: it would race with its siblings
+		// and run after the test checked the variable.
 		_, resultDiscarded := stack[len(stack)-1].(*ast.ExprStmt)
 		mayParallel := subtestsMayParallel && resultDiscarded && !assignsCapturedVar(body, fun, nil) &&
-			!usesDeferredValue(body, fun, scope)
+			!writesCapturedVar(body, fun, scope) && !usesDeferredValue(body, fun, scope)
 
 		if insertTParallel(fun.Body, innerTestVar, scope, needFixLoopVar, mayParallel) && needFixLoopVar {
-			scope.stats.loopVarCopies += copyLoopVars(stack, fun)
+			scope.stats.loopVarCopies += copyLoopVars(stack, fun, scope)
 		}
 
 		return false
 	})
 
 	if insert {
-		tpStmt := buildTParallelStmt(body.Lbrace, testVar)
+		tpStmt := buildTParallelStmt(scope.insertPos(body), testVar)
 		body.List = append([]ast.Stmt{tpStmt}, body.List...)
 		scope.stats.parallel++
 	} else if !alreadyParallel {
@@ -226,10 +242,11 @@ func callsParallel(body *ast.BlockStmt, testVar string) bool {
 }
 
 // assignsCapturedVar reports whether node assigns a variable that fun
-// references, other than those in except. Examples are want in `want = 2`
-// between two subtests, i in `for i < 3 { ...; i++ }` and tc in
-// `for _, tc = range xs`: a parallel subtest runs after its parent returns and
-// would see the last value. The post statement of a loop that declares the
+// references, or a field or element of one, other than those in except.
+// Examples are want in `want = 2` between two subtests, card in
+// `card.Status = "closed"` in a sibling subtest, i in `for i < 3 { ...; i++ }`
+// and tc in `for _, tc = range xs`: a parallel subtest runs after its parent
+// returns and would see the last value. The post statement of a loop that declares the
 // variable (the i++ in `for i := 0; ...; i++`) does not count: from Go 1.22
 // every iteration gets its own i, and copyLoopVars copies it before.
 // Assignments inside fun itself do not count.
@@ -252,8 +269,8 @@ func assignsCapturedVarOf(node ast.Node, fun *ast.FuncLit, except []string, own 
 
 	check := func(exprs ...ast.Expr) {
 		for _, expr := range exprs {
-			id, ok := expr.(*ast.Ident)
-			if ok && !slices.Contains(except, id.Name) && !own[id.Name] && identReferenced(fun.Body, id.Name) {
+			id := rootIdent(expr)
+			if id != nil && !slices.Contains(except, id.Name) && !own[id.Name] && identReferenced(fun.Body, id.Name) {
 				captured = true
 			}
 		}
@@ -313,6 +330,110 @@ func union(a, b map[string]bool) map[string]bool {
 	maps.Copy(names, b)
 
 	return names
+}
+
+// writesCapturedVar reports whether the subtest fun assigns a variable of the
+// function starting it, or a field or element of one: got in
+// `got = append(got, x)`, card in `card.Status = "closed"`, n in `n++`, or
+// through a closure of that function that fun calls, such as inc in
+// `inc := func() { n++ }`. A parallel subtest doing so races with its
+// siblings, and runs only after the function returned, i.e. after it checked
+// the variable. Variables that fun declares itself are its own.
+func writesCapturedVar(body *ast.BlockStmt, fun *ast.FuncLit, scope *testScope) bool {
+	own := funcLitNames(fun)
+	closures := localClosures(body)
+
+	var writes bool
+
+	check := func(exprs ...ast.Expr) {
+		for _, expr := range exprs {
+			id := rootIdent(expr)
+			if id != nil && id.Name != "_" && !own[id.Name] && !scope.tIdents[id.Name] && scope.locals[id.Name] {
+				writes = true
+			}
+		}
+	}
+
+	var inspect func(node ast.Node)
+
+	inspect = func(node ast.Node) {
+		ast.Inspect(node, func(n ast.Node) bool {
+			if writes {
+				return false
+			}
+
+			switch n := n.(type) {
+			case *ast.AssignStmt:
+				if n.Tok != token.DEFINE {
+					check(n.Lhs...)
+				}
+			case *ast.IncDecStmt:
+				check(n.X)
+			case *ast.RangeStmt:
+				if n.Tok == token.ASSIGN {
+					check(n.Key, n.Value)
+				}
+			case *ast.CallExpr:
+				if id, ok := n.Fun.(*ast.Ident); ok {
+					if lit, ok := closures[id.Name]; ok && !own[id.Name] {
+						delete(closures, id.Name) // Each closure is searched once.
+						inspect(lit.Body)
+					}
+				}
+			}
+
+			return !writes
+		})
+	}
+
+	inspect(fun.Body)
+
+	return writes
+}
+
+// localClosures returns the function literals assigned to a variable in body
+// (`inc := func() {...}`), by variable name. Function literals inside other
+// function literals are not searched.
+func localClosures(body *ast.BlockStmt) map[string]*ast.FuncLit {
+	closures := map[string]*ast.FuncLit{}
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		var lhs, rhs []ast.Expr
+
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.AssignStmt:
+			lhs, rhs = n.Lhs, n.Rhs
+		case *ast.ValueSpec:
+			for _, name := range n.Names {
+				lhs = append(lhs, name)
+			}
+
+			rhs = n.Values
+		default:
+			return true
+		}
+
+		if len(lhs) != len(rhs) {
+			return true
+		}
+
+		for i := range lhs {
+			id, ok := lhs[i].(*ast.Ident)
+			if !ok {
+				continue
+			}
+
+			if lit, ok := rhs[i].(*ast.FuncLit); ok {
+				closures[id.Name] = lit
+			}
+		}
+
+		return true
+	})
+
+	return closures
 }
 
 // usesDeferredValue reports whether the subtest fun uses a variable that the
@@ -514,7 +635,7 @@ func deferredVars(body *ast.BlockStmt, params *ast.FieldList) map[string]bool {
 // variables that the now parallel subtest fun captures: `tc := tc`. Before Go
 // 1.22 every iteration shares the same loop variable
 // (https://go.dev/doc/go1.22#language). It returns the number of copies.
-func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) int {
+func copyLoopVars(stack []ast.Node, fun *ast.FuncLit, scope *testScope) int {
 	var n int
 
 	for _, node := range stack {
@@ -538,7 +659,7 @@ func copyLoopVars(stack []ast.Node, fun *ast.FuncLit) int {
 
 		for _, name := range loopVars {
 			if identReferenced(fun.Body, name) && !copied[name] {
-				copies = append(copies, buildLoopVarReAssignmentStmt(body.Lbrace, name))
+				copies = append(copies, buildLoopVarReAssignmentStmt(scope.insertPos(body), name))
 			}
 		}
 
@@ -688,20 +809,54 @@ type testScope struct {
 	// test function, such as `doTest := func(tb testing.TB) {...}`, whose
 	// body denies Parallel(). Calling one denies it too.
 	localHelpers map[string]bool
+	// fset locates the nodes of the file.
+	fset *token.FileSet
+	// nolintLines are the lines of the file holding a nolint directive that
+	// applies to tparagen (see nolintLines).
+	nolintLines map[int]bool
+	// commentEnds is where the last comment starting on each line ends, by
+	// line (see lineCommentEnds).
+	commentEnds map[int]token.Pos
 	// stats collects what was done to the file the function is in.
 	stats *fileStats
 }
 
 // localDenyingClosures returns the names of the variables declared in body
 // with a function literal whose body denies Parallel() (see deniesParallel),
-// directly or by calling another such variable.
+// directly or by calling another such variable, and of the variables that
+// stand for a helper denying it (`setup := setenvHelper`). The names of the
+// fields holding such a function literal or helper in a composite literal
+// (`{name: "x", setup: func(t *testing.T) { t.Setenv(...) }}`) count too,
+// since `tc.setup(t)` runs it.
 func localDenyingClosures(body *ast.BlockStmt, scope *testScope) map[string]bool {
-	closures := map[string]*ast.FuncLit{}
+	// Several values can be bound to one name: the setup field of every
+	// entry of a table. The name denies Parallel() when any of them does.
+	closures := map[string][]*ast.FuncLit{}
+	aliases := map[string][]ast.Expr{}
+
+	bind := func(name string, value ast.Expr) {
+		if lit, ok := value.(*ast.FuncLit); ok {
+			closures[name] = append(closures[name], lit)
+
+			return
+		}
+
+		switch value.(type) {
+		case *ast.Ident, *ast.SelectorExpr:
+			aliases[name] = append(aliases[name], value)
+		}
+	}
 
 	ast.Inspect(body, func(n ast.Node) bool {
 		var lhs, rhs []ast.Expr
 
 		switch n := n.(type) {
+		case *ast.KeyValueExpr:
+			if key, ok := n.Key.(*ast.Ident); ok {
+				bind(key.Name, n.Value)
+			}
+
+			return true
 		case *ast.AssignStmt:
 			lhs, rhs = n.Lhs, n.Rhs
 		case *ast.ValueSpec:
@@ -719,13 +874,8 @@ func localDenyingClosures(body *ast.BlockStmt, scope *testScope) map[string]bool
 		}
 
 		for i := range lhs {
-			id, ok := lhs[i].(*ast.Ident)
-			if !ok {
-				continue
-			}
-
-			if lit, ok := rhs[i].(*ast.FuncLit); ok {
-				closures[id.Name] = lit
+			if id, ok := lhs[i].(*ast.Ident); ok {
+				bind(id.Name, rhs[i])
 			}
 		}
 
@@ -738,14 +888,55 @@ func localDenyingClosures(body *ast.BlockStmt, scope *testScope) map[string]bool
 	for changed := true; changed; {
 		changed = false
 
-		for name, lit := range closures {
-			if !denying[name] && deniesParallel(lit.Body, scope) {
-				denying[name], changed = true, true
+		for name, lits := range closures {
+			if denying[name] {
+				continue
+			}
+
+			for _, lit := range lits {
+				if deniesParallel(lit.Body, scope) {
+					denying[name], changed = true, true
+
+					break
+				}
+			}
+		}
+
+		for name, values := range aliases {
+			if denying[name] {
+				continue
+			}
+
+			for _, value := range values {
+				if scope.deniesWhenCalled(value) {
+					denying[name], changed = true, true
+
+					break
+				}
 			}
 		}
 	}
 
 	return denying
+}
+
+// deniesWhenCalled reports whether fun, used as a function value, denies
+// Parallel() when it is called with a testing value: it names a function
+// literal or helper known to do so (`setup := setenvHelper`, `t.Run("x",
+// setenvHelper)`).
+func (s *testScope) deniesWhenCalled(fun ast.Expr) bool {
+	if id, ok := fun.(*ast.Ident); ok && s.localHelpers[id.Name] {
+		return true
+	}
+
+	c, ok := calleeOf(&ast.CallExpr{Fun: fun}, func(name string) bool { return s.locals[name] })
+	if !ok {
+		return false
+	}
+
+	c.passes = true
+
+	return s.helpers != nil && s.helpers.denies(c, s.pkg, s.fileImports)
 }
 
 // importNames maps the name each package imported by f is referred to by to
@@ -792,9 +983,9 @@ func isMajorVersionSuffix(s string) bool {
 	return true
 }
 
-// localNames returns the names declared anywhere inside funcDecl: parameters
-// and results of the function and of every function literal in it, and every
-// variable declared with :=, var or range. Scopes are not resolved: a local
+// localNames returns the names declared anywhere inside funcDecl: receiver,
+// parameters and results of the function and of every function literal in it,
+// and every variable declared with :=, var or range. Scopes are not resolved: a local
 // variable shadowing a package-level one hides assignments to the latter.
 func localNames(funcDecl *ast.FuncDecl) map[string]bool {
 	names := map[string]bool{}
@@ -819,6 +1010,7 @@ func localNames(funcDecl *ast.FuncDecl) map[string]bool {
 		}
 	}
 
+	addFields(funcDecl.Recv)
 	addFields(funcDecl.Type.Params)
 	addFields(funcDecl.Type.Results)
 
@@ -981,13 +1173,8 @@ func deniesParallel(node ast.Node, scope *testScope) bool {
 			return true
 		}
 
-		if id, ok := call.Fun.(*ast.Ident); ok && scope.localHelpers[id.Name] {
-			denies = true
-
-			return false
-		}
-
-		denies = forbidsParallel(call, scope.tIdents) ||
+		denies = scope.callsLocalHelper(call) || scope.runsDenyingFunc(call) ||
+			forbidsParallel(call, scope.tIdents, local) ||
 			scope.helpers.deniesParallel(call, scope.pkg, scope.fileImports, local, scope.tIdents)
 
 		return !denies
@@ -996,18 +1183,64 @@ func deniesParallel(node ast.Node, scope *testScope) bool {
 	return denies
 }
 
+// callsLocalHelper reports whether call runs one of the function literals or
+// helpers that localHelpers names: `doTest(t)`, or `tc.setup(t)` on a value of
+// the test such as a table entry holding a function literal.
+func (s *testScope) callsLocalHelper(call *ast.CallExpr) bool {
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		return s.localHelpers[fun.Name]
+	case *ast.SelectorExpr:
+		root := rootIdent(fun.X)
+
+		return root != nil && s.locals[root.Name] && s.localHelpers[fun.Sel.Name]
+	}
+
+	return false
+}
+
+// runsDenyingFunc reports whether call starts a subtest with a named function
+// that denies Parallel(), as in `t.Run("x", setenvHelper)`: the subtest gets
+// a *testing.T whose ancestors must not be parallel.
+func (s *testScope) runsDenyingFunc(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Run" || len(call.Args) < 2 {
+		return false
+	}
+
+	recv, ok := sel.X.(*ast.Ident)
+	if !ok || !s.tIdents[recv.Name] {
+		return false
+	}
+
+	if _, ok := call.Args[1].(*ast.FuncLit); ok {
+		return false
+	}
+
+	return s.deniesWhenCalled(call.Args[1])
+}
+
 // forbidsParallel reports whether call panics when it is made from a parallel
 // test: t.Setenv, t.Chdir or cryptotest.SetGlobalRandom(t, ...) on any testing
-// value named in tIdents.
-func forbidsParallel(call *ast.CallExpr, tIdents map[string]bool) bool {
+// value named in tIdents, or Setenv or Chdir on a testing value stored in a
+// local value, as in `e.t.Setenv(...)`; local reports whether a name is a
+// variable of the function rather than an imported package.
+func forbidsParallel(call *ast.CallExpr, tIdents map[string]bool, local func(string) bool) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
 
 	if parallelDenyingMethods[sel.Sel.Name] {
-		if recv, ok := sel.X.(*ast.Ident); ok && tIdents[recv.Name] {
-			return true
+		switch recv := sel.X.(type) {
+		case *ast.Ident:
+			if tIdents[recv.Name] {
+				return true
+			}
+		case *ast.SelectorExpr:
+			if root := rootIdent(recv); root != nil && local(root.Name) {
+				return true
+			}
 		}
 	}
 
@@ -1189,6 +1422,77 @@ func loopVarsCopiedInBody(body *ast.BlockStmt, loopVars []string) map[string]boo
 	}
 
 	return copied
+}
+
+// lineCommentEnds returns, for each line of f on which a comment starts,
+// where the last such comment ends.
+func lineCommentEnds(fs *token.FileSet, f *ast.File) map[int]token.Pos {
+	ends := map[int]token.Pos{}
+
+	for _, cg := range f.Comments {
+		for _, c := range cg.List {
+			line := fs.Position(c.Slash).Line
+			if c.End() > ends[line] {
+				ends[line] = c.End()
+			}
+		}
+	}
+
+	return ends
+}
+
+// insertPos returns the position to give a statement inserted at the top of
+// body: its opening brace, or the end of a comment trailing it (`func TestX(t
+// *testing.T) { // see issue 12`), so that the comment stays on the line of
+// the brace instead of moving to the line of the inserted statement.
+func (s *testScope) insertPos(body *ast.BlockStmt) token.Pos {
+	if end, ok := s.commentEnds[s.fset.Position(body.Lbrace).Line]; ok && end > body.Lbrace {
+		return end
+	}
+
+	return body.Lbrace
+}
+
+// nolintLines returns the lines of f holding a nolint directive that applies
+// to tparagen, wherever the directive is: on its own line, or at the end of a
+// line of code such as `t.Run("x", func(t *testing.T) { //nolint:paralleltest`.
+func nolintLines(fs *token.FileSet, f *ast.File) map[int]bool {
+	lines := map[int]bool{}
+
+	for _, cg := range f.Comments {
+		for _, c := range cg.List {
+			if isNolintDirectiveForTparagen(c.Text) {
+				lines[fs.Position(c.Slash).Line] = true
+			}
+		}
+	}
+
+	return lines
+}
+
+// excludedByNolint reports whether the t.Run call n, whose enclosing nodes
+// are stack, is excluded by a nolint directive at the end of its own line or
+// of the line starting one of the statements enclosing it, such as the for
+// loop or the if block it is in. Like for the linters, a directive on the line
+// of a statement applies to the whole statement.
+func (s *testScope) excludedByNolint(n ast.Node, stack []ast.Node) bool {
+	if len(s.nolintLines) == 0 {
+		return false
+	}
+
+	line := func(pos token.Pos) int { return s.fset.Position(pos).Line }
+
+	if s.nolintLines[line(n.Pos())] {
+		return true
+	}
+
+	for _, node := range stack {
+		if _, ok := node.(ast.Stmt); ok && s.nolintLines[line(node.Pos())] {
+			return true
+		}
+	}
+
+	return false
 }
 
 // nolintTargets are the linter names that, when listed in a nolint directive,

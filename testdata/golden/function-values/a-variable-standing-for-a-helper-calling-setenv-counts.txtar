@@ -1,0 +1,48 @@
+Name: a variable standing for a helper calling Setenv counts
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func setenvHelper(t *testing.T) {
+	t.Setenv("KEY", "value")
+}
+
+func TestX(t *testing.T) {
+	setup := setenvHelper
+	t.Run("1", func(t *testing.T) {
+		setup(t)
+	})
+}
+
+func TestY(t *testing.T) {
+	setup := testutil.Setenv
+	t.Run("1", func(t *testing.T) {
+		setup(t)
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func setenvHelper(t *testing.T) {
+	t.Setenv("KEY", "value")
+}
+
+func TestX(t *testing.T) {
+	setup := setenvHelper
+	t.Run("1", func(t *testing.T) {
+		setup(t)
+	})
+}
+
+func TestY(t *testing.T) {
+	t.Parallel()
+	setup := testutil.Setenv
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		setup(t)
+	})
+}
