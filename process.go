@@ -823,14 +823,40 @@ type testScope struct {
 
 // localDenyingClosures returns the names of the variables declared in body
 // with a function literal whose body denies Parallel() (see deniesParallel),
-// directly or by calling another such variable.
+// directly or by calling another such variable, and of the variables that
+// stand for a helper denying it (`setup := setenvHelper`). The names of the
+// fields holding such a function literal or helper in a composite literal
+// (`{name: "x", setup: func(t *testing.T) { t.Setenv(...) }}`) count too,
+// since `tc.setup(t)` runs it.
 func localDenyingClosures(body *ast.BlockStmt, scope *testScope) map[string]bool {
-	closures := map[string]*ast.FuncLit{}
+	// Several values can be bound to one name: the setup field of every
+	// entry of a table. The name denies Parallel() when any of them does.
+	closures := map[string][]*ast.FuncLit{}
+	aliases := map[string][]ast.Expr{}
+
+	bind := func(name string, value ast.Expr) {
+		if lit, ok := value.(*ast.FuncLit); ok {
+			closures[name] = append(closures[name], lit)
+
+			return
+		}
+
+		switch value.(type) {
+		case *ast.Ident, *ast.SelectorExpr:
+			aliases[name] = append(aliases[name], value)
+		}
+	}
 
 	ast.Inspect(body, func(n ast.Node) bool {
 		var lhs, rhs []ast.Expr
 
 		switch n := n.(type) {
+		case *ast.KeyValueExpr:
+			if key, ok := n.Key.(*ast.Ident); ok {
+				bind(key.Name, n.Value)
+			}
+
+			return true
 		case *ast.AssignStmt:
 			lhs, rhs = n.Lhs, n.Rhs
 		case *ast.ValueSpec:
@@ -848,13 +874,8 @@ func localDenyingClosures(body *ast.BlockStmt, scope *testScope) map[string]bool
 		}
 
 		for i := range lhs {
-			id, ok := lhs[i].(*ast.Ident)
-			if !ok {
-				continue
-			}
-
-			if lit, ok := rhs[i].(*ast.FuncLit); ok {
-				closures[id.Name] = lit
+			if id, ok := lhs[i].(*ast.Ident); ok {
+				bind(id.Name, rhs[i])
 			}
 		}
 
@@ -867,14 +888,55 @@ func localDenyingClosures(body *ast.BlockStmt, scope *testScope) map[string]bool
 	for changed := true; changed; {
 		changed = false
 
-		for name, lit := range closures {
-			if !denying[name] && deniesParallel(lit.Body, scope) {
-				denying[name], changed = true, true
+		for name, lits := range closures {
+			if denying[name] {
+				continue
+			}
+
+			for _, lit := range lits {
+				if deniesParallel(lit.Body, scope) {
+					denying[name], changed = true, true
+
+					break
+				}
+			}
+		}
+
+		for name, values := range aliases {
+			if denying[name] {
+				continue
+			}
+
+			for _, value := range values {
+				if scope.deniesWhenCalled(value) {
+					denying[name], changed = true, true
+
+					break
+				}
 			}
 		}
 	}
 
 	return denying
+}
+
+// deniesWhenCalled reports whether fun, used as a function value, denies
+// Parallel() when it is called with a testing value: it names a function
+// literal or helper known to do so (`setup := setenvHelper`, `t.Run("x",
+// setenvHelper)`).
+func (s *testScope) deniesWhenCalled(fun ast.Expr) bool {
+	if id, ok := fun.(*ast.Ident); ok && s.localHelpers[id.Name] {
+		return true
+	}
+
+	c, ok := calleeOf(&ast.CallExpr{Fun: fun}, func(name string) bool { return s.locals[name] })
+	if !ok {
+		return false
+	}
+
+	c.passes = true
+
+	return s.helpers != nil && s.helpers.denies(c, s.pkg, s.fileImports)
 }
 
 // importNames maps the name each package imported by f is referred to by to
@@ -921,9 +983,9 @@ func isMajorVersionSuffix(s string) bool {
 	return true
 }
 
-// localNames returns the names declared anywhere inside funcDecl: parameters
-// and results of the function and of every function literal in it, and every
-// variable declared with :=, var or range. Scopes are not resolved: a local
+// localNames returns the names declared anywhere inside funcDecl: receiver,
+// parameters and results of the function and of every function literal in it,
+// and every variable declared with :=, var or range. Scopes are not resolved: a local
 // variable shadowing a package-level one hides assignments to the latter.
 func localNames(funcDecl *ast.FuncDecl) map[string]bool {
 	names := map[string]bool{}
@@ -948,6 +1010,7 @@ func localNames(funcDecl *ast.FuncDecl) map[string]bool {
 		}
 	}
 
+	addFields(funcDecl.Recv)
 	addFields(funcDecl.Type.Params)
 	addFields(funcDecl.Type.Results)
 
@@ -1110,13 +1173,8 @@ func deniesParallel(node ast.Node, scope *testScope) bool {
 			return true
 		}
 
-		if id, ok := call.Fun.(*ast.Ident); ok && scope.localHelpers[id.Name] {
-			denies = true
-
-			return false
-		}
-
-		denies = forbidsParallel(call, scope.tIdents) ||
+		denies = scope.callsLocalHelper(call) || scope.runsDenyingFunc(call) ||
+			forbidsParallel(call, scope.tIdents, local) ||
 			scope.helpers.deniesParallel(call, scope.pkg, scope.fileImports, local, scope.tIdents)
 
 		return !denies
@@ -1125,18 +1183,64 @@ func deniesParallel(node ast.Node, scope *testScope) bool {
 	return denies
 }
 
+// callsLocalHelper reports whether call runs one of the function literals or
+// helpers that localHelpers names: `doTest(t)`, or `tc.setup(t)` on a value of
+// the test such as a table entry holding a function literal.
+func (s *testScope) callsLocalHelper(call *ast.CallExpr) bool {
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		return s.localHelpers[fun.Name]
+	case *ast.SelectorExpr:
+		root := rootIdent(fun.X)
+
+		return root != nil && s.locals[root.Name] && s.localHelpers[fun.Sel.Name]
+	}
+
+	return false
+}
+
+// runsDenyingFunc reports whether call starts a subtest with a named function
+// that denies Parallel(), as in `t.Run("x", setenvHelper)`: the subtest gets
+// a *testing.T whose ancestors must not be parallel.
+func (s *testScope) runsDenyingFunc(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Run" || len(call.Args) < 2 {
+		return false
+	}
+
+	recv, ok := sel.X.(*ast.Ident)
+	if !ok || !s.tIdents[recv.Name] {
+		return false
+	}
+
+	if _, ok := call.Args[1].(*ast.FuncLit); ok {
+		return false
+	}
+
+	return s.deniesWhenCalled(call.Args[1])
+}
+
 // forbidsParallel reports whether call panics when it is made from a parallel
 // test: t.Setenv, t.Chdir or cryptotest.SetGlobalRandom(t, ...) on any testing
-// value named in tIdents.
-func forbidsParallel(call *ast.CallExpr, tIdents map[string]bool) bool {
+// value named in tIdents, or Setenv or Chdir on a testing value stored in a
+// local value, as in `e.t.Setenv(...)`; local reports whether a name is a
+// variable of the function rather than an imported package.
+func forbidsParallel(call *ast.CallExpr, tIdents map[string]bool, local func(string) bool) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
 
 	if parallelDenyingMethods[sel.Sel.Name] {
-		if recv, ok := sel.X.(*ast.Ident); ok && tIdents[recv.Name] {
-			return true
+		switch recv := sel.X.(type) {
+		case *ast.Ident:
+			if tIdents[recv.Name] {
+				return true
+			}
+		case *ast.SelectorExpr:
+			if root := rootIdent(recv); root != nil && local(root.Name) {
+				return true
+			}
 		}
 	}
 
