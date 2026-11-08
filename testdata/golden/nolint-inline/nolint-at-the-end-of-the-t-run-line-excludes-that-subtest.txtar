@@ -1,0 +1,30 @@
+Name: nolint at the end of the t.Run line excludes that subtest
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("shares the advisory lock", func(t *testing.T) { //nolint:paralleltest // runs sequentially on purpose
+		replace(t)
+	})
+	t.Run("other", func(t *testing.T) {
+		list(t)
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	t.Run("shares the advisory lock", func(t *testing.T) { //nolint:paralleltest // runs sequentially on purpose
+		replace(t)
+	})
+	t.Run("other", func(t *testing.T) {
+		t.Parallel()
+		list(t)
+	})
+}

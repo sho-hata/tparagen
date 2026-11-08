@@ -1,0 +1,69 @@
+Name: Setenv on a testing value stored in a struct counts
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+type env struct{ t *testing.T }
+
+func (e env) set() { e.t.Setenv("KEY", "value") }
+
+func (e env) log() { e.t.Log("x") }
+
+func TestX(t *testing.T) {
+	e := env{t: t}
+	t.Run("1", func(t *testing.T) {
+		e.set()
+	})
+}
+
+func TestY(t *testing.T) {
+	e := env{t: t}
+	e.t.Setenv("KEY", "value")
+	t.Run("1", func(t *testing.T) {
+		run(t)
+	})
+}
+
+func TestZ(t *testing.T) {
+	e := env{t: t}
+	t.Run("1", func(t *testing.T) {
+		e.log()
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+type env struct{ t *testing.T }
+
+func (e env) set() { e.t.Setenv("KEY", "value") }
+
+func (e env) log() { e.t.Log("x") }
+
+func TestX(t *testing.T) {
+	e := env{t: t}
+	t.Run("1", func(t *testing.T) {
+		e.set()
+	})
+}
+
+func TestY(t *testing.T) {
+	e := env{t: t}
+	e.t.Setenv("KEY", "value")
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		run(t)
+	})
+}
+
+func TestZ(t *testing.T) {
+	t.Parallel()
+	e := env{t: t}
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		e.log()
+	})
+}
