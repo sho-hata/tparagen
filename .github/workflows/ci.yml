@@ -41,6 +41,8 @@ jobs:
           go-version-file: go.mod
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
 
   # Scans with the newest stable toolchain, i.e. what release binaries are
   # built with (see release.yml). The action checks out the repository and
