@@ -1,0 +1,36 @@
+Name: subtest assigning its own variable is not affected
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	var got []string
+	t.Run("a", func(t *testing.T) {
+		var got []string
+		got = append(got, "a")
+		n := 0
+		n++
+		assert.Len(t, got, n)
+	})
+	assert.Empty(t, got)
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	var got []string
+	t.Run("a", func(t *testing.T) {
+		t.Parallel()
+		var got []string
+		got = append(got, "a")
+		n := 0
+		n++
+		assert.Len(t, got, n)
+	})
+	assert.Empty(t, got)
+}

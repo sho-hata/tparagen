@@ -1,0 +1,41 @@
+Name: sibling reassigning its own variable does not keep the subtest sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("one", func(t *testing.T) {
+		res, err := f()
+		assert.NoError(t, err)
+		res, err = g(res)
+		assert.NoError(t, err)
+	})
+	t.Run("two", func(t *testing.T) {
+		res, err := f()
+		assert.NoError(t, err)
+		assert.NotNil(t, res)
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	t.Run("one", func(t *testing.T) {
+		t.Parallel()
+		res, err := f()
+		assert.NoError(t, err)
+		res, err = g(res)
+		assert.NoError(t, err)
+	})
+	t.Run("two", func(t *testing.T) {
+		t.Parallel()
+		res, err := f()
+		assert.NoError(t, err)
+		assert.NotNil(t, res)
+	})
+}

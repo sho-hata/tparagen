@@ -1,0 +1,27 @@
+Name: nolint on a subtest excludes its nested subtests too
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Run("outer", func(t *testing.T) { //nolint:paralleltest
+		t.Run("inner", func(t *testing.T) {
+			run(t)
+		})
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	t.Run("outer", func(t *testing.T) { //nolint:paralleltest
+		t.Run("inner", func(t *testing.T) {
+			run(t)
+		})
+	})
+}

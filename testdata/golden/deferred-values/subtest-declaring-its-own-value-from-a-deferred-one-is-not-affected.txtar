@@ -1,0 +1,34 @@
+Name: subtest declaring its own value from a deferred one is not affected
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	m := NewMockClient(ctrl)
+
+	t.Run("1", func(t *testing.T) {
+		m := NewMockClient(gomock.NewController(t))
+		assert.Equal(t, 1, m.Get())
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	m := NewMockClient(ctrl)
+
+	t.Run("1", func(t *testing.T) {
+		t.Parallel()
+		m := NewMockClient(gomock.NewController(t))
+		assert.Equal(t, 1, m.Get())
+	})
+}

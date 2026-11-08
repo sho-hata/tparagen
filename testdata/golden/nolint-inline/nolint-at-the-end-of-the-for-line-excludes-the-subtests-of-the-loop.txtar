@@ -1,0 +1,35 @@
+Name: nolint at the end of the for line excludes the subtests of the loop
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Setenv("KEY", "value")
+	for _, tt := range tests { //nolint:paralleltest // the subtests read the environment
+		t.Run(tt.name, func(t *testing.T) {
+			run(t, tt)
+		})
+	}
+	t.Run("other", func(t *testing.T) {
+		list(t)
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Setenv("KEY", "value")
+	for _, tt := range tests { //nolint:paralleltest // the subtests read the environment
+		t.Run(tt.name, func(t *testing.T) {
+			run(t, tt)
+		})
+	}
+	t.Run("other", func(t *testing.T) {
+		t.Parallel()
+		list(t)
+	})
+}
