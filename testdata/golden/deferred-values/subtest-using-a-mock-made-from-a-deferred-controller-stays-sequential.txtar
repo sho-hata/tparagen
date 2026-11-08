@@ -1,0 +1,39 @@
+Name: subtest using a mock made from a deferred controller stays sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	m := NewMockClient(ctrl)
+	m.EXPECT().Get().Return(1).Times(2)
+
+	t.Run("1", func(t *testing.T) {
+		assert.Equal(t, 1, m.Get())
+	})
+	t.Run("2", func(t *testing.T) {
+		assert.Equal(t, 1, m.Get())
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	m := NewMockClient(ctrl)
+	m.EXPECT().Get().Return(1).Times(2)
+
+	t.Run("1", func(t *testing.T) {
+		assert.Equal(t, 1, m.Get())
+	})
+	t.Run("2", func(t *testing.T) {
+		assert.Equal(t, 1, m.Get())
+	})
+}

@@ -1,0 +1,27 @@
+Name: subtest counting through a closure stays sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	calls := 0
+	inc := func() { calls++ }
+	t.Run("a", func(t *testing.T) { inc() })
+	t.Run("b", func(t *testing.T) { inc() })
+	assert.Equal(t, 2, calls)
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	inc := func() { calls++ }
+	t.Run("a", func(t *testing.T) { inc() })
+	t.Run("b", func(t *testing.T) { inc() })
+	assert.Equal(t, 2, calls)
+}
