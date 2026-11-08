@@ -43,3 +43,27 @@ changelog:
   # list of the merged pull requests plus the compare link. The release is
   # complete as soon as the tag is pushed; no manual release creation needed.
   use: github-native
+
+# Publishes Casks/tparagen.rb to sho-hata/homebrew-tap, the tap fcrit lives
+# in: `brew install sho-hata/tap/tparagen`.
+homebrew_casks:
+  - repository:
+      owner: sho-hata
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/sho-hata/tparagen
+    description: Insert t.Parallel() into Go test functions and subtests
+    license: MIT
+    commit_author:
+      name: github-actions[bot]
+      email: github-actions[bot]@users.noreply.github.com
+    commit_msg_template: "Update tparagen to {{ .Tag }}"
+    # Prerelease tags (v1.4.0-rc.1) are released on GitHub but not in the tap.
+    skip_upload: auto
+    # The binary is not notarized; without this macOS Gatekeeper blocks it.
+    hooks:
+      post:
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/tparagen"]
+          end
