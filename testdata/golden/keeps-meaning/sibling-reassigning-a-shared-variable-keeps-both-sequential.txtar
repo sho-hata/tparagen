@@ -1,0 +1,31 @@
+Name: sibling reassigning a shared variable keeps both sequential
+NeedFixLoopVar: false
+-- input.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	var got []string
+	t.Run("one", func(t *testing.T) {
+		got = append(got, "one")
+	})
+	t.Run("two", func(t *testing.T) {
+		assert.Len(t, got, 1)
+	})
+}
+-- golden.go --
+package t
+
+import "testing"
+
+func TestX(t *testing.T) {
+	t.Parallel()
+	var got []string
+	t.Run("one", func(t *testing.T) {
+		got = append(got, "one")
+	})
+	t.Run("two", func(t *testing.T) {
+		assert.Len(t, got, 1)
+	})
+}
